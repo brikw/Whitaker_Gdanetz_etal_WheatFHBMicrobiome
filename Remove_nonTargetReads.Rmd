@@ -1,0 +1,334 @@
+---
+title: "Remove non-Fungal Reads"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+author: "Briana K. Whitaker"
+date: "`r Sys.Date()`"
+---
+\fontsize{9}{10}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width=6, fig.height=4,
+                      warning=FALSE, message=FALSE)
+```
+---
+
+* Run using `r version[['version.string']] `.
+
+## Objective
+For the Variety Sampling mycobiome data from samples collected in 2020 and 2021 in Ewing and Urbana Illinois: this document reports on the **removal of plant reads, other non-fungal reads, chimeras, and ASVs with no matches to either UNITE nor NCBI's nr database**. 
+
+
+# Load Packages, set path to data
+```{r, echo=FALSE, results='hide', include=FALSE} 
+
+x<-c("ggplot2", "phyloseq", "Biostrings", "tidyverse")   #, "BiodiversityR"
+lapply(x, require, character.only = TRUE)
+
+
+source("./code/fxn_blastr-bw.R")
+source("./code/multiplot.function.R")
+
+#add 'not in' function
+`%nin%` = Negate(`%in%`)
+
+#set seed
+set.seed(542)
+
+# set ggplot2 theme
+theme_set(theme_bw(base_size=16)) 
+theme_update(panel.grid.major=element_line(0), panel.grid.minor=element_line(0))
+
+# load phyloseq object from post-DADA2
+load("./data/VarSamp_ps.RData")
+ps #2901
+
+
+#SbyS <- read.csv("./data/VarSamp_SbyS.csv", row.names = 1)
+SbyE <- read.csv("./data/VarSamp_SbyE.csv", row.names = 1,
+                 stringsAsFactors = TRUE)
+SbyE$plotID <- factor(SbyE$plotID); SbyE$variety.x <- factor(SbyE$variety.x); 
+SbyE$DNA_Col <- factor(SbyE$DNA_Col); SbyE$block <- factor(SbyE$block)
+SbyE$managerPlotName <- factor(SbyE$managerPlotName); 
+
+# # sanity check, must be true
+#identical(sort(rownames(SbyE)), sort(rownames(SbyS)))
+
+```
+
+# Summarize & Remove Plant Reads
+### Run local BLASTn on local DBs
+* Note - updated allPlants database with several more ITS sequences, including "post-CLI blast, manual nr database curation" plant hits from both the BBMB and cropPNA projects. Also included several algae hits after seeing a lot of those (likely from the corn debris samples).
+* UNITE website maintains all previous releases (sh_general_ ...)
+```{r, results='hide', echo=FALSE}
+
+# import a reference database of all plant species
+allPlants.SS <- readDNAStringSet("./db/allPlants_TrAe_ZeMa_HoVu_algae.fasta")
+
+# ## on supercomputer /CLI
+# module load blast+/2.11.0
+# cat ./sh_general_release_dynamic_10.05.2021.fasta ./allPlants_TrAe_ZeMa_HoVu.fasta > ./plant_fungal_db.fasta
+# makeblastdb -in ./plant_fungal_db.fasta -dbtype nucl -title "plant-fungalDB"
+# blastn -query ./VarSamp_uniqueSeqs.fasta -db ./plant_fungal_db.fasta -word_size 50 -perc_identity 60 -out ./VarSamp_uniqueSeqs_blast.csv -outfmt 10
+
+blast <- read.csv(
+    "./intermediate/VarSamp_uniqueSeqs_blast.csv", head = FALSE, stringsAsFactors = TRUE)
+#head(blast)
+colnames(blast) <- c("QueryID", "SubjectID", "Perc.Ident", "Alignment.Length", 
+                    "Mismatches", "Gap.Openings", "Q.start", "Q.end", "S.start", 
+                    "S.end", "E", "Bits")
+
+length(table(blast$QueryID))  
+ps
+
+```
+
+* so 2590 ASVs with hits, and 2901 ASVs total, so 311 ASVs with no hits
+
+### Summarize Hits
+```{r, results='hide', echo=FALSE}
+# hit <- summ_hits_quickly(blasthits = blast)
+# write.csv(hit, "./data/VarSamp_uniqueSeqs_hit.csv")
+hit <- read.csv(
+    "./data/VarSamp_uniqueSeqs_hit.csv", row.names = 1,
+    stringsAsFactors = TRUE)
+```
+```{r}
+# Summarize Plant Contaminants
+hit %>%
+  group_by(uniq.Subject.Type) %>%
+  summarize(n = length(QueryID))
+
+```
+
+* 55 hits with high confidence not-fungal matches
+
+
+```{r, results = 'hide', echo = FALSE}
+# create key to translate NCBI names into Genus names
+get.NCBI.code <- function(fname) strsplit(basename(fname), " ")[[1]][1]  
+ncbiCode <- unname(sapply(names(allPlants.SS), get.NCBI.code)) 
+get.genus <- function(fname) strsplit(basename(fname), " ")[[1]][2]  
+genus <- unname(sapply(names(allPlants.SS), get.genus))
+ncbiKey <- data.frame("genus" = genus, "NCBI" = ncbiCode)
+
+#merge key with hit list -- NOTE, this doesn't work on hits with multiple matches
+hit_spp <- merge(hit, ncbiKey, by.x = "uniq.Subject",
+                       by.y = "NCBI", sort = FALSE, all.x = TRUE)
+
+
+# # write it out and manually edit the double hits in the Plant category
+ # write.csv(hit_spp,
+ #          "./data/VarSamp_uniqueSeqs_hit_species.csv")
+
+
+# filled in blanks for any that had multiple plant matches (and change plant type to algae for algae hits)
+hit_spp <- read.csv("./data/VarSamp_uniqueSeqs_hit_species-edit.csv",
+                                 row.names = 1, stringsAsFactors = TRUE)
+```
+
+
+### Summarize the Plant hits from this first pass
+```{r}
+hit_spp %>%
+  group_by(forcats::fct_na_value_to_level(genus)) %>%
+  summarize(n = length(QueryID))
+```
+
+### Blast no match hits
+* Externally, blastn the 311 ASVs with no hits in local blast and manually determine: plant, algae, chimera, or no hits at all origin.
+
+```{r, results = 'hide', echo = FALSE}
+# 311 ASVs have no match
+# write this out, BLAST it, 
+noMatch <- refseq(ps)[names(refseq(ps)) %nin% unique(hit$QueryID)]
+# writeXStringSet(noMatch,
+#                 filepath = "./intermediate/VarSamp_uniqueSeqs_noMatchSeqs.fasta")
+# write.csv(data.frame("names" = names(noMatch), "length" = width(noMatch)),
+#           "./data/VarSamp_noMatchSeqs_IDs.csv")
+
+### EXTERNALLY
+
+## megablast this file https://blast.ncbi.nlm.nih.gov/Blast.cgi
+##  "Your search is limited to records that exclude: models (XM/XP),
+##   uncultured/environmental sample sequences"
+#### manually edit the file to determine plant, fungal, chimera origin
+
+
+noMatch_hit <- read.csv(
+    "./data/VarSamp_noMatchSeqs_IDs-edit JAB.csv", row.names = 1,
+    stringsAsFactors = TRUE)
+
+dim(noMatch_hit %>% filter(ToRemove == "yes"))
+
+
+dim(noMatch_hit %>% filter(Plant == "Triticum"))
+
+dim(noMatch_hit %>% filter(Fungi == "yes"))
+```
+
+* Total 264 out of 311 ASVs to remove for reason of being plant origin, algae, chimera, or no hit at all
+* Of these, 160 ASVs  are Triticum/plant 
+* (so 104 ASVs that are algae, chimera, no hit)
+* Total 47 out of 311 ASVs that are fungal ASVs that match to something in NCBI's nr database.
+
+
+### Determine Plant Contamination
+```{r, results = 'hide', echo = FALSE}
+# hist(width(noMatch))
+# hist(width(ps@refseq))
+
+# fungal ASVs
+noMatch_hit %>% filter(Fungi == "yes") %>% droplevels() -> out
+fungalASVs0a <- out$names
+fungalASVs0b <- hit_spp$QueryID[hit_spp$uniq.Subject.Type == "Fungi"] %>% droplevels()
+fungalASVs <-c(fungalASVs0a, fungalASVs0b) #2535+47=2582 asvs
+
+
+# plant ASVs
+noMatch_hit %>% filter(Plant == "Triticum") %>% droplevels() -> out
+plantASVs0a <- out$names
+plantASVs0b <- hit_spp$QueryID[hit_spp$uniq.Subject.Type == "Plant"] %>% droplevels()
+plantASVs <-c(plantASVs0a, plantASVs0b) #160+22=182 asvs
+
+
+# ASVs to remove
+noMatch_hit %>% filter(ToRemove == "yes") %>% droplevels()-> out
+removeASVs0a <- out$names
+removeASVs0b <- hit_spp$QueryID[hit_spp$uniq.Subject.Type == "Plant" | hit_spp$uniq.Subject.Type == "Algae"] %>% droplevels()
+removeASVs <-c(removeASVs0a, removeASVs0b) #264+55=319 asvs
+
+```
+
+```{r, results = 'hide', echo = FALSE}
+ps_plantOnly <- ps
+ps_plantOnly@otu_table <- otu_table(ps)[,colnames(otu_table(ps)) %in% plantASVs]
+ps_plantOnly@refseq <- refseq(ps_plantOnly)[names(refseq(ps_plantOnly)) %in% plantASVs]
+# writeXStringSet(refseq(ps_plantOnly),
+#                 filepath = "./intermediate/VarSamp_uniqueSeqs_onlyPlant.fasta")
+
+ps_notFungi <- ps
+ps_notFungi@otu_table <- otu_table(ps)[,colnames(otu_table(ps)) %in% removeASVs]
+ps_notFungi@refseq <- refseq(ps_notFungi)[names(refseq(ps_notFungi)) %in% removeASVs]
+
+
+
+# determine the overall plant read contamination
+proportionPlantOverall <-
+    sum(colSums(ps_plantOnly@otu_table))/sum(colSums(ps@otu_table))  #0.21% of reads
+
+# determine the overall plant read contamination
+proportionNotFungiOverall <-
+    sum(colSums(ps_notFungi@otu_table))/sum(colSums(ps@otu_table))  #0.40% of reads
+
+
+#add a column to the environmental matrix to specify what prop. of reads were plant
+ps@sam_data$propPlant <- c(rowSums(ps_plantOnly@otu_table)/rowSums(ps@otu_table))
+
+#add a column to the environmental matrix to specify what prop. of reads were plant or other/chimera/bad
+ps@sam_data$propNotFungi <- c(rowSums(ps_notFungi@otu_table)/rowSums(ps@otu_table))
+
+# add a column for sequencing depth overall
+ps@sam_data$seqDepth <- c(rowSums(ps@otu_table))
+
+```
+
+```{r}
+proportionPlantOverall
+
+proportionNotFungiOverall
+
+```
+
+* Overall, plant contamination was very very low (0.21%) and other algae/chimera also low (~0.19%)
+
+# Make new phyloseq object
+```{r}
+# # remove plant and other non-Fungal ASVs
+# ps_fungi <- ps
+# ps_fungi@otu_table <- otu_table(ps)[,colnames(otu_table(ps)) %nin% removeASVs]
+# ps_fungi@refseq <- refseq(ps_fungi)[names(refseq(ps_fungi)) %nin% removeASVs]
+# writeXStringSet(refseq(ps_fungi),
+#                 filepath = "./data/VarSamp_uniqueSeqs_onlyFungi.fasta")
+# save(ps_fungi, file="./data/VarSamp_ps_onlyFungi.RData")
+load("./data/VarSamp_ps_onlyFungi.RData")
+ps_fungi
+
+#add a column for final "fungal" depth of sample
+ps_fungi@sam_data$fungiDepth <- c(rowSums(ps_fungi@otu_table))
+
+
+
+SbyE <- (as(sample_data(ps_fungi), "data.frame"))
+SbyS <- (as(otu_table(ps_fungi), "matrix"))
+```
+
+* Remove 319 ASVs in total of plant, algae, chimera, or no UNITE or NCBI nr hits at all. Leaves 2582 ASVs out of 2901 to start.
+
+# Figures
+
+### Proportion Not Fungal Reads
+```{r, echo = FALSE, results = 'hide', fig.width = 6, fig.height = 6}
+ggplot(data = SbyE, aes(y=propNotFungi, x = timeSample)) +
+    facet_grid(typeSample~.) +
+    geom_boxplot(aes(y=propNotFungi, x = timeSample)) +
+    geom_jitter(aes(color = timeSample), size = 1, width = 0.2) +
+    scale_y_continuous(trans = "sqrt")+ 
+    guides(color = 'none')
+```
+
+* Big differences across sample types and time points (time points being partially confounded with sample type)
+* Not a lot of differences by site, variety (not shown)
+
+### Sequencing Depth for only fungal reads
+```{r, echo = FALSE, results = 'hide', fig.width = 6, fig.height = 6}
+ggplot(data = SbyE, aes(y=fungiDepth, x = timeSample)) +
+    facet_grid(typeSample~.) +
+    geom_boxplot(aes(y=fungiDepth, x = timeSample)) +
+    geom_jitter(aes(color = timeSample), size = 1, width = 0.2) +
+    scale_y_continuous(trans = "log", breaks = c(10, 100, 1000, 10000, 50000))+ 
+    guides(color = 'none')
+```
+
+* Pretty consistent depths WITHIN sample types
+
+### Leaf samples
+```{r, echo = FALSE, results = 'hide', fig.width = 6, fig.height = 6}
+out1 <- ggplot(data = SbyE[SbyE$typeSample == "leaf",], 
+       aes(y=propNotFungi, x = timeSample)) +
+    geom_boxplot(aes(y=propNotFungi, x = timeSample)) +
+    geom_jitter(aes(color = timeSample), size = 1, width = 0.2)+ 
+    guides(color = 'none')
+out2 <- ggplot(data = SbyE[SbyE$typeSample == "leaf",], 
+       aes(y=fungiDepth, x = timeSample)) +
+    geom_boxplot(aes(y=fungiDepth, x = timeSample)) +
+    geom_jitter(aes(color = timeSample), size = 1, width = 0.2) + 
+    guides(color = 'none')
+
+multiplot(out1, out2, cols = 2)
+```
+
+* Leaves had the most plant/other contamination.
+* Which means, that the final depth for leaf samples is relatively low.
+
+```{r}
+table(SbyE$fungiDepth[SbyE$typeSample == "leaf"] > 0)
+table(SbyE$fungiDepth[SbyE$typeSample == "leaf"] > 1000)
+
+table(SbyE$fungiDepth[SbyE$typeSample == "leaf" & SbyE$timeSample != "T4"] > 1000)
+
+```
+
+* 1/3 of all leaf samples < 1000 reads total (before decontamination step). However, the worst offender is the T4 timepoint, where 2/3 of the T4 samples are <1000 reads.
+
+```{r}
+sessionInfo()
+```
+
+
+
+##### end
