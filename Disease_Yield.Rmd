@@ -1,0 +1,383 @@
+---
+title: "Analysis of Plot Level Disease Data"
+author: "Briana K. Whitaker"
+date: "`r Sys.Date()`"
+output: html_document
+---
+\fontsize{9}{10}
+---
+
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(warning=FALSE, message=FALSE)
+```
+
+
+* Run using `r version[['version.string']] `.
+
+
+# Objective
+This document reports on the plot level disease & Yield data from 2020 and 2021 in Ewing and Urbana Illinois.
+
+# Load Packages, load data
+```{r, echo=FALSE, results='hide', include=FALSE} 
+
+x<-c("car", "tidyverse", "ggplot2", "dplyr")
+lapply(x, require, character.only = TRUE)
+
+#Load functions
+source("./code/multiplot.function.R")
+
+#add functions
+`%nin%` = Negate(`%in%`)
+myMEAN <- function(x) {
+    x1 <- na.omit(x)  #number of omitted values length(attr(test,"na.action"))
+    MEAN <- mean(x1)
+}
+mySD <- function(x) {
+    x1 <- na.omit(x)  #number of omitted values length(attr(test,"na.action"))
+    SD <- sd(x1)
+}
+
+myREP <- function(x) {
+    x1 <- na.omit(x)  #number of omitted values length(attr(test,"na.action"))
+    REP <- length(x1) #number of values used in mean
+}
+
+
+#set seed
+set.seed(108)
+
+# set ggplot2 theme
+theme_set(theme_bw(base_size=10)) 
+theme_update(panel.grid.major=element_line(0), panel.grid.minor=element_line(0))
+
+site_color <- c("#8DD3C7", "#FB8072")
+```
+
+
+
+```{r,  results='hide'}  
+disease <- read.csv("./data/VarietySampling_Plot_Data_2022-12-27.csv")  
+#manually combined yield, disease scoring, toxin (Round1 and Round2), and qPCR data
+```
+
+
+```{r, echo = FALSE, results='hide'}
+disease$site <- as.factor(disease$site)  
+disease$manager <- as.factor(disease$manager)                    
+disease$managerPlotName <- as.factor(disease$managerPlotName)
+disease$block <- as.factor(disease$block)
+disease$FHBresistance <- as.factor(disease$FHBresistance)
+disease$variety <- as.factor(disease$variety)
+disease$plotID <- as.factor(unname(sapply(
+    disease$plotID, function(x) strsplit(basename(x), "_")[[1]][2])))
+
+```
+
+#Visuals
+
+
+### DON R1 vs R2
+```{r, echo = FALSE}
+donR1vR2 <- ggplot(disease, aes(x=DON.Mean.R1, y = DON.Mean.R2, size = DON.CV.R2)) +
+    geom_point() +
+    geom_abline(intercept = 0, slope = 1, colour = "blue", linetype = 2) +
+    annotate("text", x=2, y = 2.25, label = "1:1 line", colour = "blue") +
+    theme(legend.position.inside=c(.8,.2))
+
+#tiff("./figures/DON_R1vsR2.tiff", res=600, units = "in", width = 5.5, height = 5)
+donR1vR2
+#dev.off()
+
+```
+
+* Values for average DON per plot from first round of measurement (R1) verus second round (R2) show that the values are generally correlated, though not linearly.
+
+### DON vs Fg Biomass
+```{r, echo = FALSE}
+adjr2 <- round((summary(lm( FgTa.Mean ~ DON.Mean.R1, data = disease))$adj.r.squared)*100,2) #72.18
+
+don_Fg <- ggplot(disease, aes(x = DON.Mean.R1, y = FgTa.Mean)) +
+    geom_point(aes(x = DON.Mean.R1, y = FgTa.Mean, size = DON.CV.R1)) +
+    geom_smooth(method=lm, formula = y ~ x,
+             se = TRUE, color = '#666666', linetype = 1) +
+    annotate("text", x=3.5, y = 0.15, 
+             label = paste("Adj. R2 =", adjr2), colour = "#666666") +
+    annotate("text", x=.2, y = .85, label = "a)") +
+    scale_y_continuous("Average Fg Biomass") + 
+    scale_x_continuous("Average DON ug/g") +
+    scale_size_continuous("CV for DON") +
+    theme(legend.position.inside=c(.2,.7), legend.text = element_text(hjust = 0))
+don_Fg_v2 <- ggplot(disease, aes(x = DON.Mean.R1, y = FgTa.Mean)) +
+    geom_point(aes(x = DON.Mean.R1, y = FgTa.Mean, size = FgTa.CV)) +
+    geom_smooth(method=lm, formula = y ~ x,
+             se = TRUE, color = '#666666', linetype = 1) +
+    #annotate("text", x=.8, y = 0.75, 
+    #         label = paste("Adj. R2 =", adjr2), colour = "#666666") +
+    annotate("text", x=.2, y = .85, label = "b)") +
+    scale_y_continuous("Average Fg Biomass") + 
+    scale_x_continuous("Average DON ug/g") +
+    scale_size_continuous("CV for Fg") +
+    theme(legend.position.inside=c(.2,.7), legend.text = element_text(hjust = 0))
+
+#tiff("./figures/DON_fusariumBiomass_correlation.tiff", width=16.5, height=7.5, units="cm", res=300)
+multiplot(don_Fg, don_Fg_v2, cols = 2)
+#dev.off()
+
+```
+
+```{r,echo = FALSE}
+#round((summary(lm( FgTa.Mean ~ DON.Mean.R2, data = disease))$adj.r.squared)*100,2) #70.41
+
+ggplot(disease, aes(x = DON.Mean.R2, y = FgTa.Mean)) +
+    geom_point(aes(x = DON.Mean.R2, y = FgTa.Mean, size = FgTa.CV)) +
+    geom_smooth(method=lm, formula = y ~ x,
+              se = TRUE, color = '#666666', linetype = 1)+
+    scale_y_continuous("Average Fusarium Biomass") + 
+    scale_x_continuous("Average DON ug/g") +
+    scale_size_continuous("CV for Fusarium\nBiomass")
+```
+
+* generally high CVs for FgTa across the spectrum, but mostly only high CV for DON at low end of the detection window
+
+
+
+### DON, Fg biomass, & Yield by variety
+```{r,echo = FALSE}
+disease$var <- as.factor(substr(disease$variety, 10,12))
+disease$yield.kgPerkm2 <- disease$yield.lbsPerAcre*(112.03675)  #conversion factor
+disease$yield.kgPerHa <- disease$yield.kgPerkm2*(0.01)  #conversion factor
+
+dis.means <- data.frame(
+    site = c(rep(levels(disease$site), each = 3)),
+    var = c(rep(levels(disease$var), 2)),
+    yield.means = c(tapply(disease$yield.kgPerHa, list(disease$var, disease$site), myMEAN)),
+    yield.sd = c(tapply(disease$yield.kgPerHa, list(disease$var, disease$site), mySD)),
+    yield.n = c(tapply(disease$yield.kgPerHa, list(disease$var, disease$site), myREP)),
+    don.means = c(tapply(disease$DON.Mean.R1, list(disease$var, disease$site), myMEAN)),
+    don.sd = c(tapply(disease$DON.Mean.R1, list(disease$var, disease$site), mySD)),
+    don.n = c(tapply(disease$DON.Mean.R1, list(disease$var, disease$site), myREP)),
+    fg.means = c(tapply(disease$FgTa.Mean, list(disease$var, disease$site), myMEAN)),
+    fg.sd = c(tapply(disease$FgTa.Mean, list(disease$var, disease$site), mySD)),
+    fg.n = c(tapply(disease$FgTa.Mean, list(disease$var, disease$site), myREP))
+)
+dis.means$yield.se <- dis.means$yield.sd/sqrt(dis.means$yield.n)
+dis.means$don.se <- dis.means$don.sd/sqrt(dis.means$don.n)
+dis.means$fg.se <- dis.means$fg.sd/sqrt(dis.means$fg.n)
+
+pd <- position_dodge(0.25) 
+p1 <- ggplot(dis.means, 
+        aes(y = don.means, x = var, group = site, colour = site)) +
+    geom_errorbar(aes(ymin=don.means-don.se, ymax=don.means+don.se), width=.4, position=pd) +
+    geom_line(position=pd) +
+    geom_point(position=pd, size =2) +
+    scale_x_discrete("Variety") +
+    scale_color_manual("", values = site_color) +
+    scale_y_continuous("DON (ppm)") +
+    theme(legend.position = 'inside', legend.position.inside = c(.8,.8))
+p2 <- ggplot(dis.means, 
+        aes(y = fg.means, x = var, group = site, colour = site)) +
+    geom_errorbar(aes(ymin=fg.means-fg.se, ymax=fg.means+fg.se), width=.4, position=pd) +
+    geom_line(position=pd) +
+    geom_point(position=pd, size =2) +
+    scale_x_discrete("Variety") +
+    scale_color_manual("", values = site_color) +
+    scale_y_continuous(expression(paste(italic("Fusarium")," biomass"))) +
+    guides(colour = 'none')
+p3 <- ggplot(dis.means, 
+        aes(y = yield.means, x = var, group = site, colour = site)) +
+    geom_errorbar(aes(ymin=yield.means-yield.se, ymax=yield.means+yield.se), width=.4, position=pd) +
+    geom_line(position=pd) +
+    geom_point(position=pd, size =2) +
+    scale_x_discrete("Variety") +
+    scale_color_manual("", values = site_color) +
+    scale_y_continuous(expression(paste("Yield (kg ", ha^-1, ")" ))) +
+    #scale_y_continuous("Yield kg/km2") +
+    guides(colour = 'none')
+
+
+#tiff("./figures/Variety_DON_FgBiomass_Yield.tiff", width=21.56, height=7, units="cm", res=300)
+multiplot(p3, p1, p2, cols = 3)
+#dev.off()
+```
+
+* resistance=5 is ranked most susceptible, resistance=9 is ranked the most resistant
+* only Ewing site matches what we would expect
+
+#### stats
+* parametric & non-parametric approaches
+```{r}
+require(ARTool) #Aligned Rank Transform ANOVA (non-parametric for complex designs)
+hist(sqrt(disease$DON.Mean.R1))
+hist((disease$FgTa.Mean))
+hist((disease$yield.kgPerkm2))
+
+par(mfrow = c(2,2))
+mod1 <- lm(sqrt(DON.Mean.R1) ~ site*var, data = disease)
+plot(mod1)  #sqrt ok
+Anova(mod1)
+mod1art <- art(sqrt(DON.Mean.R1) ~ site*var, data = disease)
+summary(mod1art)  #everything should be ~0, meaning the alignment stripped out effects not of interest
+anova(mod1art)
+# para + non-parametric approaches give same answer, 2-way interaction + both main effects signif
+
+mod2 <- lm(sqrt(FgTa.Mean) ~ site*var, data = disease)
+plot(mod2)  #sqrt best, though still not perfect
+Anova(mod2)
+mod2art <- art(FgTa.Mean ~ site*var, data = disease)
+summary(mod2art)  
+anova(mod2art)
+# para + non-parametric approaches give same answer, 2-way interaction signif, and variety signif, site semi-signif
+
+
+mod3 <- lm(log(yield.kgPerkm2) ~ site*var, data = disease)
+plot(mod3)  #distinct pattern, but no transformation fixes it
+Anova(mod3)
+mod3art <- art(yield.kgPerkm2 ~ site*var, data = disease)
+summary(mod3art) 
+anova(mod3art)
+# para + non-parametric approaches give same answer, only site predicts yield
+
+```
+
+
+### Visual Disease Severity
+```{r,echo = FALSE}
+don_sev <- ggplot(disease, aes(x = FHBSeverity, y = DON.Mean.R2)) +
+    geom_point(aes(x = FHBSeverity, y = DON.Mean.R2, size = DON.CV.R2, colour = FHBresistance, shape = site)) +
+    geom_smooth(method=lm, formula = y ~ x,
+             se = TRUE, color = '#666666', linetype = 1) +
+    scale_x_continuous("Visual FHB Disease Severity") + 
+    scale_y_continuous("Average DON ug/g") +
+    scale_size_continuous("CV for DON")
+
+#png("./figures/DON_Severity.png",width = 6, height = 4, units = "in", res = 300)
+don_sev
+#dev.off()
+
+```
+
+* So visual disease and biomass are moderately correlated, but several extreme outliers where visual data did not match DON content.
+
+```{r, echo = FALSE}
+ggplot(disease, aes(x = FHBresistance, y = FHBSeverity)) +
+    facet_grid(.~site)+
+    geom_boxplot(outlier.shape = NA) + 
+    geom_jitter(aes(colour = site), width = .15, size = 3)
+
+```
+
+* this figure indicates that our visual scoring metric not match what we would expect, (e.g. Urbana resistance ratings opposite of what they should be)
+* and does not seem congruent with the positive relationship of DON with Disease scoring data from above
+
+
+### Disease across field
+```{r, echo = FALSE}
+
+ggplot(disease, aes(y = DON.Mean.R2)) +
+    facet_grid(.~site, scales = "free_x") +
+    geom_line(aes(x = as.numeric(plotID))) +
+    scale_x_continuous("Plot # (Field Direction)", breaks = seq(1,24,1)) +
+    geom_point(aes(x=as.numeric(plotID), colour = site), size = 3)
+
+ggplot(disease, aes(y = FgTa.Mean)) +
+    facet_grid(.~site, scales = "free_x") +
+    geom_line(aes(x = as.numeric(plotID))) +
+    scale_x_continuous("Plot # (Field Direction)", breaks = seq(1,24,1)) +
+    geom_point(aes(x=as.numeric(plotID), colour = site), size = 3)
+
+ggplot(disease, aes(y = FHBSeverity)) +
+    facet_grid(.~site, scales = "free_x") +
+    geom_line(aes(x = as.numeric(plotID))) +
+    scale_x_continuous("Plot # (Field Direction)", breaks = seq(1,24,1)) +
+    geom_point(aes(x=as.numeric(plotID), colour = site), size = 3)
+
+```
+
+
+### Yield & Test Weight
+```{r, echo = FALSE}
+
+o1 <- ggplot(disease, aes(x = FHBresistance, y = yield.lbsPerAcre)) +
+    facet_grid(.~site)+
+    geom_boxplot(outlier.shape = NA) + 
+    geom_jitter(aes(colour = site), width = .15, size = 3) +
+    scale_colour_manual(values = site_color) +
+    guides(colour = 'none')
+
+ggplot(disease, aes(y = yield.lbsPerAcre)) +
+    facet_grid(.~site, scales = "free_x") +
+    geom_line(aes(x = as.numeric(plotID))) +
+    scale_x_continuous("Plot # (Field Direction)", breaks = seq(1,24,1)) +
+    geom_point(aes(x=as.numeric(plotID), colour = site), size = 3) +
+    scale_colour_manual(values = site_color) 
+
+o2 <- ggplot(disease, aes(x = FHBresistance, y = testWeight.lbsPerBu)) +
+    facet_grid(.~site)+
+    geom_boxplot(outlier.shape = NA) + 
+    geom_jitter(aes(colour = site), width = .15, size = 3) +
+    scale_colour_manual(values = site_color) +
+    guides(colour = 'none')
+
+ggplot(disease, aes(y = testWeight.lbsPerBu)) +
+    facet_grid(.~site, scales = "free_x") +
+    geom_line(aes(x = as.numeric(plotID))) +
+    scale_x_continuous("Plot # (Field Direction)", breaks = seq(1,24,1)) +
+    geom_point(aes(x=as.numeric(plotID), colour = site), size = 3) +
+    scale_colour_manual(values = site_color)
+
+o3 <- ggplot(disease, 
+       aes(x = moistPerc, y = testWeight.lbsPerBu)) +
+    facet_grid(.~site, scales = "free_x") +
+    geom_point(aes(x = moistPerc, y = testWeight.lbsPerBu, colour = site), 
+               size = 3) +
+    scale_x_continuous("Moisture % at Harvest")+
+    scale_colour_manual(values = site_color) +
+    guides(colour = 'none')
+    
+
+#png("./figures/Yield_TestWeight_Moisture.png", width = 5, height = 7.5, units = "in", res = 300)
+multiplot(o1, o2, o3, cols = 1) 
+#dev.off()
+
+```
+
+
+* Yield fairly consistent within site, some minor variety differences, not much pattern across the field direction. 
+* Test Weight more variable at Ewing compared to Urbana (range of 5lbs/bu relative to 1lb/bu, respectively), which might be partially linked to field direction 
+* Ewing - eastern side of field had more issues with low lying/poorly drained soils, likely effect of moisture percentage.
+* 60lbs/bu is the gold standard test weight for wheat.
+
+
+
+```{r, echo = FALSE}
+ggplot(disease, aes(x = DON.Mean.R1, y = yield.lbsPerAcre)) +
+    facet_grid(.~site) +   #, scales = "free_x"
+    geom_point(aes(x = DON.Mean.R2, y = yield.lbsPerAcre, colour = site), size = 3) +
+    geom_smooth(method=lm, formula = y ~ x,
+             se = TRUE, color = '#666666', linetype = 1)
+
+ggplot(disease, aes(x = DON.Mean.R1, y = testWeight.lbsPerBu)) +
+    facet_grid(.~site) +   #, scales = "free_x"
+    geom_point(aes(x = DON.Mean.R2, y = testWeight.lbsPerBu, colour = site), size = 3) +
+    geom_smooth(method=lm, formula = y ~ x,
+             se = TRUE, color = '#666666', linetype = 1)
+
+ggplot(disease, aes(x = DON.Mean.R1, y = moistPerc)) +
+    facet_grid(.~site) +   #, scales = "free_x"
+    geom_point(aes(x = DON.Mean.R2, y = moistPerc, colour = site), size = 3) +
+    geom_smooth(method=lm, formula = y ~ x,
+             se = TRUE, color = '#666666', linetype = 1)
+
+```
+
+* DON content does not seem to be strongly linked to yield, test weight, or moisture content at harvest (can run the stats to be sure though). If there are effects, they are moderate.
+
+
+```{r}
+sessionInfo()
+```
+
+
+#### end
