@@ -1,0 +1,639 @@
+---
+title: "Secondary Community Analyses"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+author: "Briana K. Whitaker"
+date: "`r Sys.Date()`"
+---
+\fontsize{9}{10}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning =FALSE, message=FALSE, chunk)
+```
+---
+
+
+* Run using `r version[['version.string']] `.
+
+# Objective
+This document reports on the **the main structure and richness community analysis**. For the Variety Sampling mycobiome data from samples collected in 2020 and 2021 in Ewing and Urbana Illinois. 
+
+
+```{r, echo=FALSE, results='hide', include=FALSE} 
+
+x<-c("ggplot2", "phyloseq", "dplyr", "RColorBrewer", "DESeq2", "vegan", "RRPP",
+     "reshape2","ggVennDiagram",   "viridis", "Biostrings",
+     "egg", "car", "MASS", "stringr", "grid") #"geodist",
+lapply(x, require, character.only = TRUE)
+
+
+#Load functions
+source("./code/multiplot.function.R")
+
+#add 'not in' function
+`%nin%` = Negate(`%in%`)
+# geometric mean
+gm_mean_protected <- function(x) {
+  if (all(x == 0)) {
+    return (0)
+  }
+  exp(mean(log(x[x != 0])))
+}
+# function for PCoA ellipses - 
+veganCovEllipse <- function (cov, center = c(0, 0), scale = 1, npoints = 100)   {
+  theta <- (0:npoints) * 2 * pi/npoints
+  Circle <- cbind(cos(theta), sin(theta))
+  t(center + scale * t(Circle %*% chol(cov)))    }
+
+mySE <- function(x) {
+    x1 <- na.omit(x)  #number of omitted values length(attr(test,"na.action"))
+    #MEAN <- mean(x1)
+    SD <- sd(x1)
+    REP <- length(x1)
+    SE <- SD/sqrt(REP)
+}
+
+#set seed
+#runif(1, min = 0, max = 1000)
+set.seed(682)
+
+# set ggplot2 theme
+theme_set(theme_bw(base_size=14)) 
+theme_update(panel.grid.major=element_line(0), panel.grid.minor=element_line(0))
+
+# # color palettes
+# display.brewer.pal(8, "Set1")
+# brewer.pal(8, "Set1")
+type_color <- c("#A65628", "#984EA3", "#4DAF4A")
+
+# display.brewer.pal(8, "Set3")
+# brewer.pal(8, "Set3")
+site_color <- c("#8DD3C7", "#FB8072")
+
+# display.brewer.pal(11, "Spectral")
+# brewer.pal(11, "Spectral")
+time_color <- c("#bbdb15", "#ABDDA4", "#66C2A5", "#3288BD", "#5E4FA2")
+##replaced "#E6F598" with a darker "shade" of the same color
+
+# display.brewer.pal(8, "Dark2")
+# brewer.pal(8, "Dark2")
+dis_color <- c("#D95F02", "#1B9E77")
+##replaced "#E6F598" with a darker "shade" of the same color
+
+var_color <- c("#7570B3", "#E7298A", "#66A61E")
+```
+
+
+# Load Phyloseq
+```{r}
+load("./data/VarSamp_ps_assn.RData")
+ps_assn
+
+# remove ASVs with <5 reads
+ps <- ps_assn
+ps <- prune_taxa(taxa_sums(ps)>=5, ps) # removes 163 taxa
+#sort(sample_sums(ps))
+ps
+
+# load deseq
+load("./data/VarSamp_dds.RData")
+#plotDispEsts(dds)
+
+## VST & Euclidean of VST
+VST <- getVarianceStabilizedData(dds)
+VST <- t(VST)  #taxa as columns
+dist <- stats::dist(VST, method="euclidean")
+```
+
+#### Create dataframes outside phyloseq
+```{r, echo=FALSE, results='hide'}
+# create SbyE and SbyS from removed-low-abun-taxa phyloseq
+SbyS <- (as(otu_table(ps), "matrix"))
+SbyE <- (as(sample_data(ps), "data.frame"))
+
+# sanity check, must be true
+identical(sort(rownames(SbyE)), sort(rownames(ps@otu_table)))
+
+# add diversity (from full diversity phyloseq obj)
+SbyE$Sdiv <- specnumber((ps_assn@otu_table@.Data))
+SbyE$Hdiv <- diversity((ps_assn@otu_table@.Data))
+SbyE$Pdiv <- SbyE$Hdiv/log(SbyE$Sdiv)
+
+#str(SbyE)
+```
+
+# MB ~ Site x Var x Time
+
+* **Important Note about ANOVAs** - Given the experimental set up, we can't test several terms in the model because we have no replication at the plot level (i.e., no extra residuals). 
+* Non-testable terms include: site:variety.x:timeSample:block, site:timeSample:block, site:variety.x:block, & site:block
+
+#### Subset data
+* *hidden*
+
+```{r subset, echo=FALSE, results='hide'}
+##* Examine within-type individually -- don't re-calculate VST
+
+# Debris
+SbyE %>% filter(typeSample == "debris") -> SbyE_d  #lose rownames
+SbyE_d <- droplevels(SbyE_d)
+rownames(SbyE_d) <- SbyE_d$ID
+VST_d <- VST[row.names(VST) %in% SbyE_d$ID,]
+SbyS_d <- SbyS[row.names(SbyS) %in% SbyE_d$ID,]
+SbyS_d <- SbyS_d[ , colSums(SbyS_d)>0]
+identical(sort(rownames(SbyE_d)), sort(rownames(VST_d))) # must be TRUE
+dist_d <- stats::dist(VST_d, method="euclidean")
+dist;dist_d      #  sanity check, same values
+
+# Leaves
+SbyE %>% filter(typeSample == "leaf") -> SbyE_l
+SbyE_l <- droplevels(SbyE_l)
+rownames(SbyE_l) <- SbyE_l$ID
+VST_l <- VST[row.names(VST) %in% SbyE_l$ID,]
+identical(sort(rownames(SbyE_l)), sort(rownames(VST_l))) # must be TRUE
+dist_l <- stats::dist(VST_l, method="euclidean")
+
+# Heads
+SbyE %>%   
+  filter(typeSample == "head") -> SbyE_h
+SbyE_h <- droplevels(SbyE_h)
+rownames(SbyE_h) <- SbyE_h$ID
+VST_h <- VST[row.names(VST) %in% SbyE_h$ID,]
+identical(sort(rownames(SbyE_h)), sort(rownames(VST_h))) # must be TRUE
+dist_h <- stats::dist(VST_h, method="euclidean")
+
+# Heads with Low Disease at T5 only
+SbyE_h %>%   
+  filter(DiseaseStatus == "Lo" | DiseaseStatus == "") -> SbyE_h_lo
+SbyE_h_lo <- droplevels(SbyE_h_lo)
+rownames(SbyE_h_lo) <- SbyE_h_lo$ID
+VST_h_lo <- VST_h[row.names(VST_h) %in% SbyE_h_lo$ID,]
+identical(sort(rownames(SbyE_h_lo)), sort(rownames(VST_h_lo))) # must be TRUE
+dist_h_lo <- stats::dist(VST_h_lo, method="euclidean")
+
+# Heads with T5 time only
+SbyE_h %>%   
+  filter(timeSample == "T5") -> SbyE_h_t5
+SbyE_h_t5 <- droplevels(SbyE_h_t5)
+rownames(SbyE_h_t5) <- SbyE_h_t5$ID
+VST_h_t5 <- VST_h[row.names(VST_h) %in% SbyE_h_t5$ID,]
+identical(sort(rownames(SbyE_h_t5)), sort(rownames(VST_h_t5))) # must be TRUE
+dist_h_t5 <- stats::dist(VST_h_t5, method="euclidean")
+
+```
+
+
+## Debris
+* Note - for all models subset by tissue type, when the MSE error term is "Residuals", that is essentially a non-testable model term because in this experiment, the lowest treatment replication is n=1 for the full factorial, so no residual replication/degrees of freedom.
+```{r}
+# rrpp_d <- lm.rrpp(VST_d ~ site + variety.x + timeSample + site:block +
+#                     site:variety.x + site:timeSample + variety.x:timeSample +
+#                     site:variety.x:block + site:timeSample:block + 
+#                     site:variety.x:timeSample + site:variety.x:timeSample:block,
+#                     iter = 999, print.progress = TRUE, 
+#                     data = SbyE_d, SS.type="III")
+# anova_d <- anova(rrpp_d, effect.type = "F", error = c(
+#     "site:block", "site:variety.x:block",  "site:timeSample:block", "Residuals",
+#     "site:variety.x:block", "site:timeSample:block", "site:variety.x:timeSample:block",
+#     "Residuals", "Residuals", "site:variety.x:timeSample:block", "Residuals"))
+# summary(anova_d, formula = false)
+# capture.output(summary(anova_d, formula = false),
+#    file = file.path("./tables/VarSamp_rrpp_d.txt")) 
+
+```
+
+
+## Leaves
+```{r}
+# rrpp_l <- lm.rrpp(VST_l ~ site + variety.x + timeSample + site:block +
+#                     site:variety.x + site:timeSample + variety.x:timeSample +
+#                     site:variety.x:block + site:timeSample:block +
+#                     site:variety.x:timeSample , #+ site:variety.x:timeSample:block
+#                     iter = 999, print.progress = TRUE,
+#                     data = SbyE_l, SS.type="III")
+# anova_l <- anova(rrpp_l, effect.type = "F", error = c(
+#     "site:block", "site:variety.x:block",  "site:timeSample:block", "Residuals",
+#     "site:variety.x:block", "site:timeSample:block", "Residuals",
+#     "Residuals", "Residuals", "Residuals"))
+# summary(anova_l, formula = false)
+# capture.output(summary(anova_l, formula = false),
+#    file = file.path("./tables/VarSamp_rrpp_l.txt"))
+
+```
+* Note for leaves , missing a lot of samples due to low read counts.
+
+## Heads
+* Note for heads - testing first site x variety x time for only the low disease heads at T5 (asserting that those are the "normal' status of heads in the field)
+* Then, separately testing whether high disease has an outsize effect on the microbiome at T5 timepoint, relateive to low disease heads
+```{r}
+# rrpp_h <- lm.rrpp(VST_h_lo ~ site + variety.x + timeSample + site:block +
+#                     site:variety.x + site:timeSample + variety.x:timeSample +
+#                     site:variety.x:block + site:timeSample:block + 
+#                     site:variety.x:timeSample + site:variety.x:timeSample:block,
+#                     iter = 999, print.progress = TRUE, 
+#                     data = SbyE_h_lo, SS.type="III")
+# anova_h <- anova(rrpp_h, effect.type = "F", error = c(
+#     "site:block", "site:variety.x:block",  "site:timeSample:block", "Residuals",
+#     "site:variety.x:block", "site:timeSample:block", "site:variety.x:timeSample:block",
+#     "Residuals", "Residuals", "site:variety.x:timeSample:block", "Residuals"))
+# summary(anova_h, formula = false)
+# capture.output(summary(anova_h, formula = false),
+#    file = file.path("./tables/VarSamp_rrpp_h.txt"))
+```
+
+```{r}
+#table(SbyE_h_t5$DiseaseStatus, SbyE_h_t5$site, SbyE_h_t5$variety.x)
+# rrpp_h_t5 <- lm.rrpp(VST_h_t5 ~ site + variety.x + DiseaseStatus + site:block +
+#                     site:variety.x + site:DiseaseStatus + variety.x:DiseaseStatus +
+#                     site:variety.x:block + site:DiseaseStatus:block + 
+#                     site:variety.x:DiseaseStatus + site:variety.x:DiseaseStatus:block,
+#                     iter = 999, print.progress = TRUE, 
+#                     data = SbyE_h_t5, SS.type="III")
+# anova_h_t5 <- anova(rrpp_h_t5, effect.type = "F", error = c(
+#     "site:block", "site:variety.x:block",  "site:DiseaseStatus:block", "Residuals",
+#     "site:variety.x:block", "site:DiseaseStatus:block", "site:variety.x:DiseaseStatus:block",
+#     "Residuals", "Residuals", "site:variety.x:DiseaseStatus:block", "Residuals"))
+# summary(anova_h_t5, formula = false)
+# capture.output(summary(anova_h_t5, formula = false),
+#    file = file.path("./tables/VarSamp_rrpp_h_t5.txt"))
+```
+
+
+
+
+# PCoA by sample type
+```{r pcoaSample, include = FALSE}
+pcoa_d <- cmdscale(dist_d, eig =TRUE)
+pcoa_l <- cmdscale(dist_l, eig =TRUE)
+pcoa_h <- cmdscale(dist_h_lo, eig =TRUE)
+pcoa_h_t5 <- cmdscale(dist_h_t5, eig =TRUE)
+
+# axes
+expl_d_1 <- round(pcoa_d$eig[1] / sum(pcoa_d$eig), 3) * 100
+expl_d_2 <- round(pcoa_d$eig[2] / sum(pcoa_d$eig), 3) * 100 
+expl_d_3 <- round(pcoa_d$eig[3] / sum(pcoa_d$eig), 3) * 100 
+expl_l_1 <- round(pcoa_l$eig[1] / sum(pcoa_l$eig), 3) * 100
+expl_l_2 <- round(pcoa_l$eig[2] / sum(pcoa_l$eig), 3) * 100 
+expl_l_3 <- round(pcoa_l$eig[3] / sum(pcoa_l$eig), 3) * 100 
+expl_h_1 <- round(pcoa_h$eig[1] / sum(pcoa_h$eig), 3) * 100
+expl_h_2 <- round(pcoa_h$eig[2] / sum(pcoa_h$eig), 3) * 100 
+expl_h_3 <- round(pcoa_h$eig[3] / sum(pcoa_h$eig), 3) * 100 
+expl_h_t5_1 <- round(pcoa_h_t5$eig[1] / sum(pcoa_h_t5$eig), 3) * 100
+expl_h_t5_2 <- round(pcoa_h_t5$eig[2] / sum(pcoa_h_t5$eig), 3) * 100 
+expl_h_t5_3 <- round(pcoa_h_t5$eig[3] / sum(pcoa_h_t5$eig), 3) * 100 
+
+#scores
+# scores
+d_scores <- as.data.frame(pcoa_d$points); d_scores$ids <- rownames(d_scores) 
+d_dat <- merge(d_scores, SbyE_d, by.x="ids", by.y="ID")
+d_dat$site_time <- as.factor(paste(d_dat$site, d_dat$timeSample, sep = "_"))
+
+l_scores <- as.data.frame(pcoa_l$points); l_scores$ids <- rownames(l_scores) 
+l_dat <- merge(l_scores, SbyE_l, by.x="ids", by.y="ID")
+l_dat$site_time <- as.factor(paste(l_dat$site, l_dat$timeSample, sep = "_"))
+
+h_scores <- as.data.frame(pcoa_h$points); h_scores$ids <- rownames(h_scores) 
+h_dat <- merge(h_scores, SbyE_h_lo, by.x="ids", by.y="ID")
+h_dat$site_time <- as.factor(paste(h_dat$site, h_dat$timeSample, sep = "_"))
+
+h_scores_t5 <- as.data.frame(pcoa_h_t5$points); h_scores_t5$ids <- rownames(h_scores_t5) 
+h_dat_t5 <- merge(h_scores_t5, SbyE_h_t5, by.x="ids", by.y="ID")
+h_dat_t5$site_dis <- as.factor(paste(h_dat_t5$site, h_dat_t5$DiseaseStatus, sep = "_"))
+```
+
+```{r ellipses, include = FALSE}
+# #### For the debris plot 
+# d_site <- data.frame() 
+# for(g in levels(d_dat$site)){ 
+#   d_site <- rbind(d_site, cbind(as.data.frame(with(
+#     d_dat[d_dat$site==g,],  
+#     veganCovEllipse(cov.wt(cbind(V1, V2),
+#          wt=rep(1/length(V1),length(V1)))$cov, 
+#          center=c(mean(V1), mean(V2)))   )) , site=g))   }
+d_site_timeEll <- data.frame() 
+for(g in levels(d_dat$site_time)){ 
+  d_site_timeEll <- rbind(d_site_timeEll, cbind(as.data.frame(with(
+    d_dat[d_dat$site_time==g,],  
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+         wt=rep(1/length(V1),length(V1)))$cov, 
+         center=c(mean(V1), mean(V2)))   )) , site_time=g))   } 
+d_site_timeEll <- data.frame(d_site_timeEll,
+        data.frame(str_split(d_site_timeEll$site_time, "_", simplify = T)))
+d_site_timeEll$X1 -> d_site_timeEll$Site; 
+d_site_timeEll$X2 -> d_site_timeEll$timeSample
+
+# #### For the leaf plot 
+# l_site <- data.frame() 
+# for(g in levels(l_dat$site)){ 
+#   l_site <- rbind(l_site, cbind(as.data.frame(with(
+#     l_dat[l_dat$site==g,],  
+#     veganCovEllipse(cov.wt(cbind(V1, V2),
+#          wt=rep(1/length(V1),length(V1)))$cov, 
+#          center=c(mean(V1), mean(V2)))   )) , site=g))   } 
+l_site_timeEll <- data.frame() 
+for(g in levels(l_dat$site_time)){ 
+  l_site_timeEll <- rbind(l_site_timeEll, cbind(as.data.frame(with(
+    l_dat[l_dat$site_time==g,],  
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+         wt=rep(1/length(V1),length(V1)))$cov, 
+         center=c(mean(V1), mean(V2)))   )) , site_time=g))   } 
+l_site_timeEll <- data.frame(l_site_timeEll,
+        data.frame(str_split(l_site_timeEll$site_time, "_", simplify = T)))
+l_site_timeEll$X1 -> l_site_timeEll$Site; 
+l_site_timeEll$X2 -> l_site_timeEll$timeSample
+
+# #### For the head plot 
+# h_site <- data.frame() 
+# for(g in levels(h_dat$site)){ 
+#   h_site <- rbind(h_site, cbind(as.data.frame(with(
+#     h_dat[h_dat$site==g,],  
+#     veganCovEllipse(cov.wt(cbind(V1, V2),
+#          wt=rep(1/length(V1),length(V1)))$cov, 
+#          center=c(mean(V1), mean(V2)))   )) , site=g))   } 
+h_site_timeEll <- data.frame() 
+for(g in levels(h_dat$site_time)){ 
+  h_site_timeEll <- rbind(h_site_timeEll, cbind(as.data.frame(with(
+    h_dat[h_dat$site_time==g,],  
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+         wt=rep(1/length(V1),length(V1)))$cov, 
+         center=c(mean(V1), mean(V2)))   )) , site_time=g))   } 
+h_site_timeEll <- data.frame(h_site_timeEll,
+        data.frame(str_split(h_site_timeEll$site_time, "_", simplify = T)))
+h_site_timeEll$X1 -> h_site_timeEll$Site; 
+h_site_timeEll$X2 -> h_site_timeEll$timeSample
+
+
+# #### For the T5 head plot 
+# h_site_t5 <- data.frame() 
+# for(g in levels(h_dat_t5$site)){ 
+#   h_site_t5 <- rbind(h_site_t5, cbind(as.data.frame(with(
+#     h_dat_t5[h_dat_t5$site==g,],  
+#     veganCovEllipse(cov.wt(cbind(V1, V2),
+#          wt=rep(1/length(V1),length(V1)))$cov, 
+#          center=c(mean(V1), mean(V2)))   )) , site=g))   } 
+h_site_dis_t5 <- data.frame() 
+for(g in levels(h_dat_t5$site_dis)){ 
+  h_site_dis_t5 <- rbind(h_site_dis_t5, cbind(as.data.frame(with(
+    h_dat_t5[h_dat_t5$site_dis==g,],  
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+         wt=rep(1/length(V1),length(V1)))$cov, 
+         center=c(mean(V1), mean(V2)))   )) , site_dis=g))   } 
+h_site_dis_t5 <- data.frame(h_site_dis_t5,
+        data.frame(str_split(h_site_dis_t5$site_dis, "_", simplify = T)))
+h_site_dis_t5$X1 -> h_site_dis_t5$Site; 
+h_site_dis_t5$X2 -> h_site_dis_t5$DiseaseStatus
+
+```
+
+
+```{r, echo = FALSE, results = 'hide'}
+d_site_time <- ggplot() + coord_equal() + 
+    geom_path(data = d_site_timeEll, aes(x = V1, y = V2,
+          linetype = Site, color = timeSample), linewidth = 1.1,
+          show.legend = TRUE) +    
+    geom_point(data = d_dat, aes(x = V1, y = V2, 
+          shape = site, color = timeSample) , size = 2) +
+    scale_colour_manual("Time", values = time_color[1:2]) +
+    #scale_linetype_discrete("Site") + 
+    scale_shape_manual("Site", values = c(16,17, 16,17)) +
+    scale_x_continuous(paste("PCoA 1 (", expl_d_1, "%)", sep = "")) +
+    scale_y_continuous(paste("PCoA 2 (", expl_d_2, "%)", sep = "")) +
+    theme(legend.position = "bottom")
+    #annotate("text", x=-31, y=20, label = "Debris", size = 6)
+
+l_site_time <- ggplot() + coord_equal() + 
+    geom_path(data = l_site_timeEll, aes(x = V1, y = V2,
+          linetype = Site, color = timeSample), linewidth = 1.1,
+          show.legend = TRUE) +
+    geom_point(data = l_dat, aes(x = V1, y = V2, 
+          shape = site, color = timeSample) , size = 2) +
+    scale_colour_manual("Time", values = time_color[1:4]) +
+    #scale_linetype_discrete("Site") + 
+    scale_shape_manual("Site", values = c(16,17,18,19, 16,17,18,19)) +
+    scale_x_continuous(paste("PCoA 1 (", expl_l_1, "%)", sep = "")) +
+    scale_y_continuous(paste("PCoA 2 (", expl_l_2, "%)", sep = "")) +
+    theme(legend.position = "bottom")
+    #annotate("text", x=-15, y=17, label = "Leaves", size = 6)
+
+h_site_time <- ggplot() + coord_equal() + 
+    geom_path(data = h_site_timeEll, aes(x = V1, y = V2,
+          linetype = Site, color = timeSample), linewidth = 1.1,
+          show.legend = TRUE) +
+    geom_point(data = h_dat, aes(x = V1, y = V2, 
+          shape = site, color = timeSample) , size = 2) + 
+    scale_colour_manual("Time", values = time_color[3:5]) +
+    #scale_linetype_discrete("Site") + 
+    scale_shape_manual("Site", values = c(16,17,18, 16,17,18)) +
+    scale_x_continuous(paste("PCoA 1 (", expl_h_1, "%)", sep = "")) +
+    scale_y_continuous(paste("PCoA 2 (", expl_h_2, "%)", sep = "")) +
+    theme(legend.position = "bottom")
+    #annotate("text", x=-37, y=19, label = "Heads", size = 6)
+
+
+#tiff("./figures/PCoa_TissuePanel_SitexTime.tiff", width=18, height=6, units="in", res=300)
+#multiplot(d_site_time, l_site_time, h_site_time, cols = 3)
+#dev.off()
+```
+
+.
+
+```{r, echo = FALSE}
+d_site_time
+```
+
+.
+
+```{r, echo = FALSE}
+l_site_time
+```
+
+.
+
+```{r, echo = FALSE}
+h_site_time
+```
+
+
+```{r, echo = FALSE, results = 'hide'}
+h_site_t5plot <- ggplot() + coord_equal() + 
+    geom_path(data = h_site_dis_t5, aes(x = V1, y = V2,
+          linetype = Site, color = DiseaseStatus), linewidth = 1.1,
+          show.legend = TRUE) +
+    #scale_linetype_manual("", values = c(1,2,1,2)) + 
+    geom_point(data = h_dat_t5, aes(x = V1, y = V2, 
+          shape = site, color = DiseaseStatus) , size = 2) +  #shape = variety.x, 
+    scale_colour_manual("Disease", values = dis_color) +
+    scale_shape_manual("Site", values = c(16,17,16,17)) + 
+    scale_x_continuous(paste("PCoA 1 (", expl_h_t5_1, "%)", sep = "")) +
+    scale_y_continuous(paste("PCoA 2 (", expl_h_t5_2, "%)", sep = "")) +
+    theme(legend.position = "bottom")
+    #annotate("text", x=-37, y=19, label = "T5 Heads", size = 6)
+
+#tiff("./figures/PCoa_T5Heads_SitexDisease.tiff", width=6, height=6, units="in", res=300)
+h_site_t5plot
+#dev.off()
+
+```
+
+* Okay, so far based on visuals - Tissue type > Location > Time point > Variety
+* Not sure yet about within field interactions (block)
+
+
+
+```{r, include = FALSE, fig.keep = 'none'}
+c <- d_site_time + guides(colour = 'none', shape = 'none', linetype = 'none')
+d <- l_site_time + guides(colour = 'none', shape = 'none', linetype = 'none')
+e <- h_site_time + guides(colour = 'none', shape = 'none', linetype = 'none')
+f <- h_site_t5plot + guides(colour = 'none', shape = 'none', linetype = 'none')
+
+
+#tiff("./figures/PCoa_TissuePanel.tiff", width=16.5, height=15, units="cm", res=300)
+ggarrange(c, d, e, f,
+          ncol = 2, nrow = 2,
+          widths = c(1, 1), heights = c(1,1),
+          labels = c("c)", "d)", "e)", "f)" ), 
+          label.args = list(gp=gpar(font=2, fontsize=12), 
+                            x=unit(1,"line"), hjust=1, vjust=.9) )
+#dev.off()
+ 
+```
+
+
+# PCoA by Variety
+```{r, include = FALSE}
+# Heads - EWING subset
+SbyE_h %>%   
+  filter(site == "Ewing") -> SbyE_h_e
+SbyE_h_e <- droplevels(SbyE_h_e)
+rownames(SbyE_h_e) <- SbyE_h_e$ID
+VST_h_e <- VST[row.names(VST) %in% SbyE_h_e$ID,]
+identical(sort(rownames(SbyE_h_e)), sort(rownames(VST_h_e))) # must be TRUE
+dist_h_e <- stats::dist(VST_h_e, method="euclidean")
+# Heads - URBANA subset
+SbyE_h %>%   
+  filter(site == "Urbana") -> SbyE_h_u
+SbyE_h_u <- droplevels(SbyE_h_u)
+rownames(SbyE_h_u) <- SbyE_h_u$ID
+VST_h_u <- VST[row.names(VST) %in% SbyE_h_u$ID,]
+identical(sort(rownames(SbyE_h_u)), sort(rownames(VST_h_u))) # must be TRUE
+dist_h_u <- stats::dist(VST_h_u, method="euclidean")
+
+
+#pcoa
+pcoa_h_e <- cmdscale(dist_h_e, eig =TRUE)
+pcoa_h_u <- cmdscale(dist_h_u, eig =TRUE)
+# axes
+expl_h_e_1 <- round(pcoa_h_e$eig[1] / sum(pcoa_h_e$eig), 3) * 100
+expl_h_e_2 <- round(pcoa_h_e$eig[2] / sum(pcoa_h_e$eig), 3) * 100 
+expl_h_e_3 <- round(pcoa_h_e$eig[3] / sum(pcoa_h_e$eig), 3) * 100 
+expl_h_u_1 <- round(pcoa_h_u$eig[1] / sum(pcoa_h_u$eig), 3) * 100
+expl_h_u_2 <- round(pcoa_h_u$eig[2] / sum(pcoa_h_u$eig), 3) * 100 
+expl_h_u_3 <- round(pcoa_h_u$eig[3] / sum(pcoa_h_u$eig), 3) * 100 
+#scores
+h_scores_e <- as.data.frame(pcoa_h_e$points); h_scores_e$ids <- rownames(h_scores_e) 
+h_dat_e <- merge(h_scores_e, SbyE_h_e, by.x="ids", by.y="ID")
+h_dat_e$time_var_dis <- as.factor(paste(
+    h_dat_e$timeSample, h_dat_e$variety.x, h_dat_e$DiseaseStatus, sep = "_"))
+h_dat_e$time_dis <- as.factor(paste(
+    h_dat_e$timeSample,h_dat_e$DiseaseStatus, sep = "_"))
+h_scores_u <- as.data.frame(pcoa_h_u$points); h_scores_u$ids <- rownames(h_scores_u) 
+h_dat_u <- merge(h_scores_u, SbyE_h_u, by.x="ids", by.y="ID")
+h_dat_u$time_var_dis <- as.factor(paste(
+    h_dat_u$timeSample, h_dat_u$variety.x, h_dat_u$DiseaseStatus, sep = "_"))
+h_dat_u$time_dis <- as.factor(paste(
+    h_dat_u$timeSample,h_dat_u$DiseaseStatus, sep = "_"))
+
+# summarize
+h_sum_e <- data.frame(time_var_dis = levels(h_dat_e$time_var_dis),
+           variety.x = c(rep(levels(h_dat_e$variety.x), 4)),
+           time_dis = c(rep(levels(h_dat_e$time_dis)[1:2], each =3),
+                        rep(levels(h_dat_e$time_dis)[3:4], 3)),
+           mean_V1 = tapply(h_dat_e$V1, h_dat_e$time_var_dis, mean),
+           se_V1 = tapply(h_dat_e$V1, h_dat_e$time_var_dis, mySE),
+           mean_V2 = tapply(h_dat_e$V2, h_dat_e$time_var_dis, mean),
+           se_V2 = tapply(h_dat_e$V2, h_dat_e$time_var_dis, mySE) )
+h_sum_u <- data.frame(time_var_dis = levels(h_dat_u$time_var_dis),
+           variety.x = c(rep(levels(h_dat_u$variety.x), 4)),
+           time_dis = c(rep(levels(h_dat_u$time_dis)[1:2], each =3),
+                        rep(levels(h_dat_u$time_dis)[3:4], 3)),
+           mean_V1 = tapply(h_dat_u$V1, h_dat_u$time_var_dis, mean),
+           se_V1 = tapply(h_dat_u$V1, h_dat_u$time_var_dis, mySE),
+           mean_V2 = tapply(h_dat_u$V2, h_dat_u$time_var_dis, mean),
+           se_V2 = tapply(h_dat_u$V2, h_dat_u$time_var_dis, mySE) )
+# reverse V1 axes for urbana, to make ewing and urbana plots oriented similarly
+h_sum_u$mean_V1 <- -1*h_sum_u$mean_V1 
+h_sum_u$se_V1   <- -1*h_sum_u$se_V1 
+h_sum_u$mean_V2 <- -1*h_sum_u$mean_V2
+h_sum_u$se_V2   <- -1*h_sum_u$se_V2
+
+# plot
+theme_set(theme_bw(base_size=10)) 
+theme_update(panel.grid.major=element_line(0), panel.grid.minor=element_line(0))
+h_e_Varplot <- ggplot() + #coord_equal() +
+    geom_errorbarh(data = h_sum_e, height = 1.2, linewidth = 1,
+                   aes(xmax = mean_V1+se_V1, xmin = mean_V1-se_V1, y = mean_V2,
+                       color = variety.x,)) +
+    geom_errorbar(data = h_sum_e,   width = 1.2, linewidth = 1,
+                   aes(ymax = mean_V2+se_V2, ymin = mean_V2-se_V2, x = mean_V1,
+                       color = variety.x,)) +    
+    geom_point(data = h_sum_e, aes(x = mean_V1, y = mean_V2,
+         shape = time_dis), size = 2) +
+    scale_colour_manual("Var.", values = var_color) +
+    #scale_linetype_manual("Time", values =c(1,2,3,4) ) + 
+    scale_shape_manual("Time", values = c(10, 16, 17,15)) +
+    scale_x_continuous(paste("PCoA 1 (", expl_h_e_1, "%)", sep = "")) +
+    scale_y_continuous(paste("PCoA 2 (", expl_h_e_2, "%)", sep = "")) +
+    annotate("text", x = -22, y = 11, label = "Ewing", size = 3) 
+
+h_u_Varplot <- ggplot() + #coord_equal() +
+    geom_errorbarh(data = h_sum_u, height = 1.2, linewidth = 1,
+                   aes(xmax = mean_V1+se_V1, xmin = mean_V1-se_V1, y = mean_V2,
+                       color = variety.x,)) +
+    geom_errorbar(data = h_sum_u,   width = 1.2, linewidth = 1,
+                   aes(ymax = mean_V2+se_V2, ymin = mean_V2-se_V2, x = mean_V1,
+                       color = variety.x,)) +    
+    geom_point(data = h_sum_u, aes(x = mean_V1, y = mean_V2,
+         shape = time_dis), size = 2) +
+    scale_colour_manual("Var.", values = var_color) +
+    #scale_linetype_manual("Time", values =c(1,2,3,4) ) + 
+    scale_shape_manual("Time", values = c(10, 16, 17,15)) +
+    scale_x_continuous(paste("PCoA 1 (", expl_h_u_1, "%)", sep = "")) +
+    scale_y_continuous(paste("PCoA 2 (", expl_h_u_2, "%)", sep = "")) +
+    annotate("text", x = -21, y = 12, label = "Urbana", size = 3)
+
+
+g <- h_e_Varplot + guides(colour = 'none', shape = 'none')
+h <- h_u_Varplot + guides(colour = 'none', shape = 'none')
+
+#tiff("./figures/PCoa_HeadVarPanel.tiff", width=8.5, height=8.5, units="cm", res=300)
+ggarrange(g, h,
+          ncol = 1, nrow = 2,
+          heights = c(1,1),
+          labels = c("b)", "c)" ), 
+          label.args = list(gp=gpar(font=2, fontsize=10), 
+                            x=unit(1,"line"), hjust=1, vjust=.9) )
+#dev.off()
+```
+
+```{r}
+#tiff("./figures/PCoa_HeadVarPanel_E.tiff", width=16.5, height=4.25, units="cm", res=300)
+h_e_Varplot #+ theme(legend.position = "top")
+h_u_Varplot
+#dev.off()
+```
+
+* EWING var492 most susceptible - low disease heads look like high disease heads of the other two varieties, while the high disease ones look like low disease heads of other two?
+* URBANA var505 most resistant - low disease heads look like high disease heads of the other two varieties (but also disease pressure overall lower here)
+
+```{r}
+sessionInfo()
+```
+
+
+
+
+###### end

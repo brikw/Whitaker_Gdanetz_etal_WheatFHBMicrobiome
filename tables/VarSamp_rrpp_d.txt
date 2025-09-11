@@ -1,0 +1,28 @@
+
+Analysis of Variance, using Residual Randomization
+Permutation procedure: Randomization of null model residuals 
+Number of permutations: 1000 
+Estimation method: Ordinary Least Squares 
+Sums of Squares and Cross-products: Type III 
+Effect sizes (Z) based on F distributions
+
+                                Df    SS      MS      Rsq      F      Z Pr(>F)    
+site                             1  1134 1133.69 0.016410 1.6382 1.4053  0.054 .  
+variety.x                        2  1160  580.01 0.016792 0.8968 2.0837  0.057 .  
+timeSample                       1  1522 1521.87 0.022029 1.5087 3.1415  0.092 .  
+site:block                       6  4152  692.03 0.060104 0.0000 0.0000  1.000    
+site:variety.x                   2  1091  545.65 0.015797 0.8437 1.0398  0.009 ** 
+site:timeSample                  1  1068 1068.10 0.015461 1.0588 1.5807  0.028 *  
+variety.x:timeSample             2  1848  923.82 0.026745 1.0893 1.0357  0.005 ** 
+site:variety.x:block            12  7761  646.77 0.112346 0.0000 0.0000  1.000    
+site:timeSample:block            6  6053 1008.75 0.087612 0.0000 0.0000  1.000    
+site:variety.x:timeSample        2  1579  789.53 0.022857 0.9310 3.3987  0.001 ***
+site:variety.x:timeSample:block 12 10177  848.05 0.147310 0.0000 0.0000  1.000    
+Total                           47 69084                                          
+---
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+Call: lm.rrpp(f1 = VST_d ~ site + variety.x + timeSample + site:block +  
+    site:variety.x + site:timeSample + variety.x:timeSample +  
+    site:variety.x:block + site:timeSample:block + site:variety.x:timeSample +  
+    site:variety.x:timeSample:block, iter = 999, SS.type = "III",      data = SbyE_d, print.progress = TRUE)

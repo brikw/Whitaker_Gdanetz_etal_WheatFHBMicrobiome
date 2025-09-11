@@ -1,0 +1,29 @@
+
+Analysis of Variance, using Residual Randomization
+Permutation procedure: Randomization of null model residuals 
+Number of permutations: 1000 
+Estimation method: Ordinary Least Squares 
+Sums of Squares and Cross-products: Type III 
+Effect sizes (Z) based on F distributions
+
+                                   Df    SS      MS      Rsq      F      Z Pr(>F)    
+site                                1  1382 1382.29 0.023383 1.4075 0.2382  0.060 .  
+variety.x                           2  1760  879.86 0.029768 1.0452 2.0831  0.059 .  
+DiseaseStatus                       1   778  778.11 0.013163 0.7514 3.1415  0.091 .  
+site:block                          6  5892  982.08 0.099680 0.0000 0.0000  1.000    
+site:variety.x                      2  1700  850.00 0.028758 1.0097 1.0362  0.009 ** 
+site:DiseaseStatus                  1   953  953.17 0.016124 0.9205 1.5822  0.029 *  
+variety.x:DiseaseStatus             2  1701  850.49 0.028775 0.8073 1.0345  0.006 ** 
+site:variety.x:block               12 10102  841.80 0.170883 0.0000 0.0000  1.000    
+site:DiseaseStatus:block            6  6213 1035.53 0.105104 0.0000 0.0000  1.000    
+site:variety.x:DiseaseStatus        2  1899  949.27 0.032116 0.9011 3.3327  0.001 ***
+site:variety.x:DiseaseStatus:block 12 12642 1053.47 0.213850 0.0000 0.0000  1.000    
+Total                              47 59114                                          
+---
+Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+
+Call: lm.rrpp(f1 = VST_h_t5 ~ site + variety.x + DiseaseStatus + site:block +  
+    site:variety.x + site:DiseaseStatus + variety.x:DiseaseStatus +  
+    site:variety.x:block + site:DiseaseStatus:block + site:variety.x:DiseaseStatus +  
+    site:variety.x:DiseaseStatus:block, iter = 999, SS.type = "III",  
+    data = SbyE_h_t5, print.progress = TRUE)
