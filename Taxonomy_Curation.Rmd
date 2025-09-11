@@ -1,0 +1,218 @@
+---
+title: "Control for Contamination & Assign taxonomy"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+author: "Briana K. Whitaker"
+date: "`r Sys.Date()`"
+---
+\fontsize{9}{10}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width=3.5, fig.height=3,
+                      warning=FALSE, message=FALSE)
+```
+---
+
+* Run using `r version[['version.string']] `.
+
+# Objective
+This document reports on the **decontamination and taxonomic assignment** for the Variety Sampling mycobiome data from samples collected in 2020 and 2021 in Ewing and Urbana Illinois.  
+
+* Examine negative controls. Then remove contaminating ASVs
+* Assign taxonomy.
+
+#### Load Packages, set path to data (hidden)
+```{r, echo=FALSE, results='hide', include=FALSE} 
+
+x<-c("ggplot2", "phyloseq", "Biostrings", "dplyr", "tidyverse", "glmnet", "torch")  
+lapply(x, require, character.only = TRUE)
+
+#add 'not in' function
+`%nin%` = Negate(`%in%`)
+
+#set seed
+set.seed(183)
+
+# set ggplot2 theme
+theme_set(theme_bw(base_size=16)) 
+theme_update(panel.grid.major=element_line(0), panel.grid.minor=element_line(0))
+
+# load phyloseq object from post-plant removal
+load("./data/VarSamp_ps_onlyFungi.RData")
+ps_fungi
+
+#add a column for final "fungal" depth of sample
+ps_fungi@sam_data$fungiDepth <- c(rowSums(ps_fungi@otu_table))
+
+SbyE <- (as(sample_data(ps_fungi), "data.frame"))
+SbyS <- (as(otu_table(ps_fungi), "matrix"))
+
+# sanity check, must be true
+identical(sort(rownames(SbyE)), sort(rownames(SbyS)))
+
+```
+
+# Controls
+
+### Negatives
+* Note that PCR1-Blk-B, which was on plate 2, had no reads after the 2nd filtering step in DADA2. (Plate2-A9 well)
+```{r}
+SbyE[SbyE$typeSample == "negative", c("ID", "DNA_Location", "fungiDepth")]
+
+ps_cont <- subset_samples(ps_fungi, typeSample == "negative") 
+ps_cont <- filter_taxa(ps_cont, function(x) mean(x) > 0, TRUE)
+otu_table(ps_cont)
+#rowSums(otu_table(ps_cont))
+
+contam_taxa <- colnames(otu_table(ps_cont))
+ps_contam <- prune_taxa(contam_taxa, ps_fungi)
+
+# other samples contaminating ASVs are in.
+sub <- otu_table(ps_contam)[rowSums(otu_table(ps_contam))>0, ]
+sub
+
+contaminated_samples <- rownames(sub)
+
+#colSums(otu_table(ps_cont)) == colSums(otu_table(ps_contam))
+#SbyE[,c("fungiDepth", "ID")]
+
+```
+
+* No contamination during PCR2 step.
+* No contamination on Plate 2 during PCR1
+* Only two ASVs causing the contamination problems. 
+* One contamn ASV = ASV1305 is only in PCR1-Blk-C aka Plate 3. It is a good match on NCBI's nr database to F. graminearum (probably from one of our ND isolates in the lab, when this seq run prepped at the same time)
+* The other contam ASV = ASV250 is in PCR1-Blk-A aka Plate 1, and six other samples. It is a match to Candida sake, which is used as a biocontrol agent in apples, and can be found on cheese surfaces.
+* We have previously found Candida in our wheat/barley/corn debris sequencing runs before.
+* L08-T1, L13-T1, L19-T2, L23-T3, L23-T4 are the contaminated samples. On plates 1 and 2.
+* there are 6 other Candida's in the sequence set (checked with Warcup - ASV250 is not distinctly different by alignment and quick Geneious tree, so it is probable that it is native to the system and not an external contaminant like ASV1305 almost certainly is.)
+* **However - given the relatively low read count, easiest and simplest solution is to just remove those ASVs from the dataset completely.**
+
+```{r}
+ps_curated0a <- prune_taxa(taxa_names(ps_fungi) != contam_taxa[1] & 
+                         taxa_names(ps_fungi) != contam_taxa[2],
+                            ps_fungi)
+table(rowSums(otu_table(ps_curated0a))>0)
+#table(colSums(otu_table(ps_curated0a))>0) # sanity check, no 0 read ASVs
+
+# sanity check, 
+# reads corresponding to contam taxa removed from total read count of contaminated samples
+#rowSums(otu_table(ps_curated0a)[contaminated_samples,])
+#rowSums(otu_table(ps_fungi)[contaminated_samples,])
+
+ps_curated0b <- prune_samples(sample_sums(ps_curated0a)>0, ps_curated0a)
+ps_curated <- prune_samples(sample_sums(ps_curated0b)>=500, ps_curated0b)
+
+```
+
+* After removing contaminating reads, PCR blanks now 0 reads:
+* PCR1-Blk-A, PCR1-Blk-C, PCR2-Blank
+* In addition, seven more samples with 0 reads, removed:
+* L03-T4, L06-T2, L09-T2, L09-T4, L13-T4 ,L15-T1, L22-T2 
+* And 13 samples with read counts < 500 reads (all leaves)
+
+```{r}
+# #output my own fasta file
+# writeXStringSet(refseq(ps_curated),
+#                 filepath = "./data/VarSamp_curatedSeqs.fasta")
+curatedSS <- readDNAStringSet("./data/VarSamp_curatedSeqs.fasta")
+```
+
+
+# Taxonomic Classification
+* Qiime2 implementation of a Naive Bayesian Classifier using the UNITE, 2025.02 release, Euks, RefS, dynamic as the database (command line)
+* Code for training and classifying in ./code/qiime_featureclassifier_commandLine.txt
+```{r}
+# qiime.unite <- read.delim("./data/taxonomy.tsv", sep = "\t")
+# hier <- c("domain", 'phylum', 'class', 'order', 
+#           'family', 'genus', 'species', 'SH')
+# qiime.unite %>% separate(Taxon, into = hier, sep = ";") %>% 
+#     merge(qiime.unite) %>% 
+#     select(-Taxon) -> qiime.unite
+# qiime.unite$domain  <- gsub(qiime.unite$domain , pattern = "k__", replacement = "")
+# qiime.unite$phylum  <- gsub(qiime.unite$phylum , pattern = "p__", replacement = "")
+# qiime.unite$class   <- gsub(qiime.unite$class  , pattern = "c__", replacement = "")
+# qiime.unite$order   <- gsub(qiime.unite$order  , pattern = "o__", replacement = "")
+# qiime.unite$family  <- gsub(qiime.unite$family , pattern = "f__", replacement = "")
+# qiime.unite$genus   <- gsub(qiime.unite$genus  , pattern = "g__", replacement = "")
+# qiime.unite$species <- gsub(qiime.unite$species, pattern = "s__", replacement = "")
+# qiime.unite$SH      <- gsub(qiime.unite$SH     , pattern = "sh__", replacement = "")
+# write.csv(qiime.unite, "./data/VarSamp_curatedSeqs_qiime2_nbayes_UNITE.csv")
+qiime.unite <- read.csv("./data/VarSamp_curatedSeqs_qiime2_nbayes_UNITE-edit2.csv",
+                        stringsAsFactors = TRUE, row.names=1)
+```
+
+* Taxa with low confidence/incertae sedis
+```{r}
+hist(qiime.unite$Confidence)
+#dim(qiime.unite %>% filter(grepl('Incertae_sedis', phylum)))[1]
+#dim(qiime.unite %>% filter(grepl('Incertae_sedis', class)))[1]
+#dim(qiime.unite %>% filter(grepl('Incertae_sedis', order)))[1]
+#dim(qiime.unite %>% filter(grepl('Incertae_sedis', family)))[1]
+```
+
+* however, note that this is not necessarily a true representation at the lower levels. UNITE may have a family in uncertain placement within the order, but then still assign a high confidence genus name
+* Phylum: **40** 
+* Class: **96**
+* Order: **184**
+
+```{r}
+# #save PS again with tax table
+# rownames(qiime.unite) <- qiime.unite$Feature.ID
+# qiime.unite %>% select(-Feature.ID, -Confidence, -SH, -check) -> qiime.unite
+# 
+# ps_assn <- ps_curated
+# ps_assn@tax_table <- tax_table(as.matrix(qiime.unite))
+# 
+# # small cleaning up of files
+# SbyE <- (as(sample_data(ps_assn), "data.frame"))
+# SbyE %>% dplyr::select(-manager.x, -manager.y, -variety.y) -> SbyE
+# sample_data(ps_assn) <- SbyE
+# # save out file
+# save(ps_assn, file="./data/VarSamp_ps_assn.RData")
+
+load("./data/VarSamp_ps_assn.RData")
+ps_assn
+```
+
+### Check if Unknowns are Fusarium
+```{r}
+table(qiime.unite$domain) # 3 protists (Alveolata/Cilophora)
+table(qiime.unite$phylum, useNA = "always") #68
+table(qiime.unite$class, useNA = "always")  #185
+table(qiime.unite$order, useNA = "always")  #250
+table(qiime.unite$family, useNA = "always") #545
+table(qiime.unite$genus, useNA = "always")  #829
+
+
+# possible Fusarium only
+table(qiime.unite$check, useNA = "always")  
+            #160 Unknown Ascomycota or Sordariomycetes or Hypocreales
+
+# all low COnf
+qiime.unite %>% filter(if_any(genus, is.na)) %>% droplevels -> lowConf
+curatedSS[names(curatedSS) %in% lowConf$Feature.ID] -> lowConfSS
+#writeXStringSet(refseq(lowConfSS),
+#                 filepath = "./data/VarSamp_lowConfSeqs.fasta")
+
+# only low conf with the possibility to be Fusarium (so following in the taxonomic hierarchy)
+qiime.unite %>% filter(check == 'yes') %>% droplevels -> lowConf_maybeFus
+curatedSS[names(curatedSS) %in% lowConf_maybeFus$Feature.ID] -> maybeFusSS
+#writeXStringSet(refseq(maybeFusSS),
+#                 filepath = "./data/VarSamp_lowConfSeqs_maybeFus.fasta")
+# externally BLAST this on website using nr database
+
+```
+
+
+```{r}
+sessionInfo()
+```
+
+
+
+##### end

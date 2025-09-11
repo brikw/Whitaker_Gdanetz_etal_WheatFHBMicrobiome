@@ -1,0 +1,46 @@
+# qiime naive bayes classifier
+# UNITE 2025-02 release, Euks, RefS, dynamic
+
+## import
+module load qiime2/2023.7
+qiime tools import \
+  --type 'FeatureData[Sequence]' \
+  --input-path sh_refs_qiime_ver10_dynamic_all_19.02.2025.fasta \
+  --output-path sh_refs_qiime_ver10_dynamic_all_19.02.2025.qza
+qiime tools import \
+  --type 'FeatureData[Taxonomy]' \
+  --input-format TSVTaxonomyFormat \
+  --input-path sh_taxonomy_qiime_ver10_dynamic_all_19.02.2025.txt \
+  --output-path sh_taxonomy_qiime_ver10_dynamic_all_19.02.2025.qza 
+
+## train
+qiime feature-classifier fit-classifier-naive-bayes \
+  --i-reference-reads sh_refs_qiime_ver10_dynamic_all_19.02.2025.qza \
+  --i-reference-taxonomy sh_taxonomy_qiime_ver10_dynamic_all_19.02.2025.qza \
+  --o-classifier classifier.qza
+
+
+## import fasta
+# note to get fna type qiime wants, use seqinr package, no new line
+#curated <- read.fasta("./data/VarSamp_curatedSeqs.fasta")
+#write.fasta(curated, names(curated), nbchar = 1000, file.out = "./data/VarSamp_curatedSeqs.fna")
+# then convert from lowercase to uppercase ACGT
+tr 'acgt' 'ACGT' < VarSamp_curatedSeqs.fna > seqs.fna
+qiime tools import \
+  --input-path VarSamp_curatedSeqs.fna \
+  --output-path seqs.qza \
+  --type 'FeatureData[Sequence]'
+
+## classify
+qiime feature-classifier classify-sklearn \
+  --i-classifier classifier.qza \
+  --i-reads seqs.qza \
+  --o-classification taxonomy.qza
+qiime metadata tabulate \
+  --m-input-file taxonomy.qza \
+  --o-visualization taxonomy.qzv
+
+## export
+qiime tools export \
+  --input-path taxonomy.qza \
+  --output-path taxonomy_table
