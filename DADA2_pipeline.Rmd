@@ -148,7 +148,7 @@ rbind(FWD.ForwardReads = sapply(FWD.orients, primerHits, fn = fnFs.filtN[[145]])
 
 # 2) Remove Primers
 ```{r cutadaptSetup, results='hide', echo=FALSE}
-cutadapt <- "C:/Users/Briana.Whitaker/AppData/Roaming/Python/Python310/Scripts/cutadapt.exe" #change to location on your machine
+cutadapt <- "C:/path/to/cutadapt.exe" #change to location on your machine
 system2(cutadapt, args = "--version") #v.4.0
 
 path.cut <- file.path(path, "cutadapt-")
@@ -395,9 +395,9 @@ dim(seqtab.nochim)
 **(hidden)**
 
 ```{r trackReads, results='hide', echo=FALSE}
-#subset again to remove any samples that did not pass filtering
-SeqsOrig.df2 <- SeqsOrig.df[not.lost,]
-out2 <- out[not.lost,]
+# #subset again to remove any samples that did not pass filtering
+# SeqsOrig.df2 <- SeqsOrig.df[not.lost,]
+# out2 <- out[not.lost,]
 
 # track reads through the pipeline
 getN <- function(x) sum(getUniques(x))
