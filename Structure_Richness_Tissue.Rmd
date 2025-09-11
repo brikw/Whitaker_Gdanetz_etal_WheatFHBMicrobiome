@@ -1,0 +1,606 @@
+---
+title: "Basic Community Analyses"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+author: "Briana K. Whitaker"
+date: "`r Sys.Date()`"
+---
+\fontsize{9}{10}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning =FALSE, message=FALSE)
+```
+---
+
+
+* Run using `r version[['version.string']] `.
+
+# Objective
+This document reports on the **the preliminary structure and richness community analysis**. For the Variety Sampling mycobiome data from samples collected in 2020 and 2021 in Ewing and Urbana Illinois. 
+
+
+```{r, echo=FALSE, results='hide', include=FALSE} 
+
+x<-c("ggplot2", "phyloseq", "dplyr", "RColorBrewer", "DESeq2", "vegan", "RRPP",
+     "geodist","reshape2","ggVennDiagram",   "viridis", "Biostrings",
+     "egg", "car", "MASS", 'grid')
+lapply(x, require, character.only = TRUE)
+
+
+#Load functions
+source("./code/multiplot.function.R")
+
+#add 'not in' function
+`%nin%` = Negate(`%in%`)
+# geometric mean
+gm_mean_protected <- function(x) {
+  if (all(x == 0)) {
+    return (0)
+  }
+  exp(mean(log(x[x != 0])))
+}
+# function for PCoA ellipses - 
+veganCovEllipse <- function (cov, center = c(0, 0), scale = 1, npoints = 100)   {
+  theta <- (0:npoints) * 2 * pi/npoints
+  Circle <- cbind(cos(theta), sin(theta))
+  t(center + scale * t(Circle %*% chol(cov)))    }
+
+#set seed
+#runif(1, min = 0, max = 1000)
+set.seed(682)
+
+# set ggplot2 theme
+theme_set(theme_bw(base_size=12)) 
+theme_update(panel.grid.major=element_line(0), panel.grid.minor=element_line(0))
+
+# # color palettes
+# display.brewer.pal(8, "Set1")
+# brewer.pal(8, "Set1")
+type_color <- c("#A65628", "#984EA3", "#4DAF4A")
+
+# display.brewer.pal(8, "Set3")
+# brewer.pal(8, "Set3")
+site_color <- c("#8DD3C7", "#FB8072")
+
+```
+
+
+# Load Phyloseq
+```{r}
+load("./data/VarSamp_ps_assn.RData")
+ps_assn
+```
+
+#### Create dataframes outside phyloseq
+```{r, echo=FALSE, results='hide'}
+SbyS <- (as(otu_table(ps_assn), "matrix"))
+SbyE <- (as(sample_data(ps_assn), "data.frame"))
+
+# sanity check, must be true
+identical(sort(rownames(SbyE)), sort(rownames(ps_assn@otu_table)))
+
+# add diversity
+SbyE$Sdiv <- specnumber((ps_assn@otu_table@.Data))
+SbyE$Hdiv <- diversity((ps_assn@otu_table@.Data))
+SbyE$Pdiv <- SbyE$Hdiv/log(SbyE$Sdiv)
+
+#str(SbyE)
+```
+
+
+```{r, echo = FALSE, results = 'hide'}
+# #look at data
+# # physical design of experiment
+# table(SbyE$site)
+# table(SbyE$variety.x)
+# table(SbyE$site, SbyE$block)
+# table(SbyE$site, SbyE$variety.x)
+table(SbyE$variety.x, SbyE$block, SbyE$site)
+
+# # collection design
+# table(SbyE$typeSample)
+# table(SbyE$timeSample)
+table(SbyE$timeSample, SbyE$typeSample)
+table(SbyE$timeSample, SbyE$DiseaseStatus)
+
+# note, lowest sample rep in T4 leaf due to low read abundance samples
+```
+
+# Basic Taxa Information
+
+#### for MS
+```{r, echo = FALSE, results= 'hide'}
+## TOP TEN
+# fungal
+totalDepthPostCurate <- sum(colSums(otu_table(ps_assn))); totalDepthPostCurate
+topten <- sort(colSums(otu_table(ps_assn)), decreasing = TRUE)[1:10]
+sum(topten/totalDepthPostCurate) #53.0% of reads in top 10 ASVs
+tax_table(ps_assn)[names(topten),"genus"]
+
+```
+
+```{r, include = FALSE}
+# taxonmic notes, for manuscript
+qiime.unite <- read.csv("./data/VarSamp_curatedSeqs_qiime2_nbayes_UNITE-edit2.csv",
+                row.names = 1)
+rownames(qiime.unite) <- qiime.unite$Feature.ID
+totASVs <- dim(qiime.unite)[1]
+
+sort(table(qiime.unite$phylum), decreasing = TRUE)/totASVs
+sort(table(qiime.unite$class), decreasing = TRUE)[1:12]
+top_genera <- sort(table(qiime.unite$genus), decreasing = TRUE)[c(1:3,5:8,10:11,13)]
+top_genera
+
+table(qiime.unite$genus)[c("Fusarium")]
+```
+
+```{r, include = FALSE}
+tax_glom(ps_assn, taxrank="genus") -> ps_assn_g
+colSums(ps_assn_g@otu_table)/totalDepthPostCurate -> out
+sort(out, decreasing = TRUE)[1:10]
+
+# looking at some important species
+Cladosporium <- rownames(qiime.unite)[qiime.unite$genus == "Cladosporium"]  #Cladosporium
+sum(rowSums(SbyS[,colnames(SbyS) %in% Cladosporium]))/totalDepthPostCurate
+# 18.5% of reads
+
+Fusarium <- rownames(qiime.unite)[qiime.unite$genus == "Fusarium"]
+sum(rowSums(SbyS[,colnames(SbyS) %in% Fusarium]))/totalDepthPostCurate
+# 12.3% of reads are Fusarium
+
+Vishniacozyma <- rownames(qiime.unite)[qiime.unite$genus == "Vishniacozyma"]
+sum(rowSums(SbyS[,colnames(SbyS) %in% Vishniacozyma]))/totalDepthPostCurate
+# 8.5% yeasts
+
+Alternaria <- rownames(qiime.unite)[qiime.unite$genus == "Alternaria" ]
+sum(rowSums(SbyS[,colnames(SbyS) %in% Alternaria]))/totalDepthPostCurate
+# 8.1% of reads are Alternaria
+
+Hannaella <- rownames(qiime.unite)[qiime.unite$genus == "Hannaella"]
+sum(rowSums(SbyS[,colnames(SbyS) %in% Hannaella]))/totalDepthPostCurate
+#5.0%
+
+Sporobolomyces <- rownames(qiime.unite)[qiime.unite$genus == "Sporobolomyces"]
+sum(rowSums(SbyS[,colnames(SbyS) %in% Sporobolomyces]))/totalDepthPostCurate
+# 4.9% yeasts
+
+Papiliotrema <- rownames(qiime.unite)[qiime.unite$genus == "Papiliotrema"]
+sum(rowSums(SbyS[,colnames(SbyS) %in% Papiliotrema]))/totalDepthPostCurate
+# 3.8% yeasts
+
+Colletotrichum <- rownames(qiime.unite)[qiime.unite$genus == "Colletotrichum"]
+sum(rowSums(SbyS[,colnames(SbyS) %in% Colletotrichum]))/totalDepthPostCurate
+#3.1%
+
+Bullera <- rownames(qiime.unite)[qiime.unite$genus == "Bullera"]
+sum(rowSums(SbyS[,colnames(SbyS) %in% Bullera]))/totalDepthPostCurate
+#2.6% yeast
+
+Neosetophoma <- rownames(qiime.unite)[qiime.unite$genus == "Neosetophoma"]
+sum(rowSums(SbyS[,colnames(SbyS) %in% Neosetophoma]))/totalDepthPostCurate
+#2.0%
+
+Aureobasidium <- rownames(qiime.unite)[qiime.unite$genus == "Aureobasidium"] #Aureobasidium
+sum(rowSums(SbyS[,colnames(SbyS) %in% Aureobasidium]))/totalDepthPostCurate
+#1.8% yeast
+
+Dioszegia <- rownames(qiime.unite)[qiime.unite$genus == "Dioszegia"]
+sum(rowSums(SbyS[,colnames(SbyS) %in% Dioszegia]))/totalDepthPostCurate
+#0.9% yeast
+
+```
+
+
+```{r, include = FALSE}
+# several here with lots of ASVs, but low read counts
+Ramularia <- rownames(qiime.unite)[qiime.unite$genus == "Ramularia"]
+sum(rowSums(SbyS[,colnames(SbyS) %in% Ramularia]))/totalDepthPostCurate
+#<0.1% of reads
+Sphaerulina <- rownames(qiime.unite)[qiime.unite$genus == "Sphaerulina"]
+sum(rowSums(SbyS[,colnames(SbyS) %in% Sphaerulina]))/totalDepthPostCurate
+#<0.1%
+Taphrina <- rownames(qiime.unite)[qiime.unite$genus == "Taphrina"]
+sum(rowSums(SbyS[,colnames(SbyS) %in% Taphrina]))/totalDepthPostCurate
+#<0.1%
+Rhexocercosporidium <- rownames(qiime.unite)[qiime.unite$genus == "Rhexocercosporidium"]
+sum(rowSums(SbyS[,colnames(SbyS) %in% Rhexocercosporidium]))/totalDepthPostCurate
+#<0.1%
+Phaeosphaeria <- rownames(qiime.unite)[qiime.unite$genus == "Phaeosphaeria"]
+sum(rowSums(SbyS[,colnames(SbyS) %in% Phaeosphaeria]))/totalDepthPostCurate
+#0.1%
+Filobasidium <- rownames(qiime.unite)[qiime.unite$genus == "Filobasidium"]
+sum(rowSums(SbyS[,colnames(SbyS) %in% Filobasidium]))/totalDepthPostCurate
+#0.3%
+
+```
+
+#### Rarefaction Curves 
+* *hidden*
+```{r, results = 'hide', echo = FALSE, fig.height = 3.5, fig.width = 4.5}
+origmar <- par()$mar
+
+# pdf("./figures/Rarefaction Curves All Samples.pdf", width=6, height=6)
+# par(mfrow = c(1, 1))
+# #min sqn reads per sample
+# min_depth <- min(rowSums(SbyS)) ; min_depth   #524
+# rarecurve(SbyS, step=20, label = FALSE, col = 'blue') #sample = min_depth,
+# abline(v=min_depth, col = "black", lty = 2)
+# rarecurve(SbyS, step=20, label = FALSE, col = 'blue', xlim = c(0,5000)) #sample = min_depth,
+# abline(v=min_depth, col = "black", lty = 2)
+# dev.off()
+
+par(mar = origmar)
+```
+
+# Basic Descriptive Figures 
+
+## Relative Abundance Plots
+
+```{r, echo = FALSE, results = 'hide', fig.height = 4, fig.width = 6}
+require(viridis)
+topTen <- names(topten)
+otherASVs <- c(colnames(otu_table(ps_assn))[colnames(otu_table(ps_assn)) %nin% topTen])
+
+dat <- data.frame(SbyE[,c("typeSample", "site", "variety.x", "timeSample")] ,
+                  decostand((otu_table(ps_assn)),"total")[,topTen] ,
+   Other = rowSums(decostand((otu_table(ps_assn)),"total")[,otherASVs] ))
+# covert wide-format data.frame into long-format using 'melt'
+dat2 <- reshape2::melt(dat, id.vars=c("typeSample", "site", "variety.x", "timeSample"))
+
+# make an ASV color variable, with gray for 'other'
+asv_color <- c(viridis_pal(option = "plasma")(length(levels(dat2$variable))-1),
+               "#696969")
+
+# write.csv(tax_table(ps_assn)[rownames(tax_table(ps_assn)) %in% topTen,],
+#           "./intermediate/VarSamp_topTen_tax.csv")
+# # need to go in and manually add rank column to this table
+
+```
+
+```{r, echo = FALSE, results = 'hide', fig.height = 4, fig.width = 6}
+type.dat = dat2 %>% group_by(typeSample, variable) %>% summarize(value = sum(value))
+a <- ggplot(type.dat, aes(x = typeSample, y = value, fill = variable)) +
+  geom_bar(stat = "identity", position = 'fill') +
+  scale_fill_manual("ASV", values = asv_color) +
+  xlab("") + ylab("Relative Abundance") +
+  theme_bw()
+  #theme(axis.title.x = element_text(size=8),
+  #      axis.text.x  = element_text(size=8)) +
+  #theme(legend.text = element_text(size = 7)) +
+  #theme(legend.title = element_text(size = 9))
+#tiff("./figures/RelAbun_type.tiff", width=4, height=6, units="in", res=300)
+a
+#dev.off()
+```
+
+```{r, echo = FALSE, results = 'hide', fig.height = 4, fig.width = 6}
+loc.dat = dat2 %>% group_by(site, variable) %>% summarize(value = sum(value))
+b <- ggplot(loc.dat, aes(x = site, y = value, fill = variable)) +
+  geom_bar(stat = "identity", position = 'fill') +
+  scale_fill_manual("ASV", values = asv_color) +
+  xlab("") + ylab("Relative Abundance") +
+  theme_bw()
+  #theme(axis.title.x = element_text(size=8),
+  #      axis.text.x  = element_text(size=8)) +
+  #theme(legend.text = element_text(size = 7)) +
+  #theme(legend.title = element_text(size = 9))
+#tiff("./figures/RelAbun_site.tiff", width=3.5, height=6, units="in", res=300)
+b
+#dev.off()
+```
+
+
+```{r, echo = FALSE, results = 'hide', fig.height = 4, fig.width = 6}
+var.dat = dat2 %>% group_by(variety.x, variable) %>% summarize(value = sum(value))
+c <- ggplot(var.dat, aes(x = variety.x, y = value, fill = variable)) +
+  geom_bar(stat = "identity", position = 'fill') +
+  scale_fill_manual("ASV", values = asv_color) +
+  xlab("") + ylab("Relative Abundance") +
+  theme_bw()
+  #theme(axis.title.x = element_text(size=8),
+  #      axis.text.x  = element_text(size=8)) +
+  #theme(legend.text = element_text(size = 7)) +
+  #theme(legend.title = element_text(size = 9))
+#tiff("./figures/RelAbun_variety.tiff", width=4, height=6, units="in", res=300)
+c
+#dev.off()
+```
+
+```{r, echo = FALSE, results = 'hide', fig.height = 4, fig.width = 6}
+time.dat = dat2 %>% group_by(timeSample, variable) %>% summarize(value = sum(value))
+d <- ggplot(time.dat, aes(x = timeSample, y = value, fill = variable)) +
+  geom_bar(stat = "identity", position = 'fill') +
+  scale_fill_manual("ASV", values = asv_color) +
+  xlab("") + ylab("Relative Abundance") +
+  theme_bw() +
+  theme(axis.text.x  = element_text(size=8, angle=60, vjust=.3, hjust =.3))
+  #theme(axis.title.x = element_text(size=8),
+  #      axis.text.x  = element_text(size=8)) +
+  #theme(legend.text = element_text(size = 7)) +
+  #theme(legend.title = element_text(size = 9))
+#tiff("./figures/RelAbun_time.tiff", width=5.5, height=6, units="in", res=300)
+d
+#dev.off()
+```
+
+```{r, fig.keep='none', include = FALSE}
+a1 <- a + guides(fill = 'none'); b1 <- b + guides(fill = 'none');
+c1 <- c + guides(fill = 'none'); d1 <- d + guides(fill = 'none')
+
+# a2 <- a + theme(legend.position = 'bottom') + 
+# guides(fill = guide_legend(nrow=1)) +scale_fill_manual("", values = asv_color)
+# #a2
+
+ra_all <- ggarrange(a1, b1, c1, d1, 
+          ncol = 2, nrow = 2,
+          widths = c(1, 1.5), heights = c(1,1),
+          labels = c("a)", "b)", "c)", "d)"), 
+          label.args = list(gp=gpar(font=2, fontsize=12), 
+                            x=unit(1,"line"), hjust=1, vjust=.9) )
+
+
+#tiff("./figures/RelAbun_all.tiff", width=16.5, height=11.5, units="cm", res=300)
+ra_all
+#dev.off()
+```
+
+
+# Venn Diagram
+```{r, echo = FALSE, results = 'hide', fig.height = 4, fig.width = 6}
+table(colSums(subset_samples(ps_assn, typeSample == "debris")@otu_table) >0) #928
+table(colSums(subset_samples(ps_assn, typeSample == "leaf")@otu_table) >0) #254
+table(colSums(subset_samples(ps_assn, typeSample == "head")@otu_table) >0) #1888
+
+d <- subset_samples(ps_assn, typeSample == "debris")
+dASVs <- colnames(d@otu_table[,colSums(d@otu_table) > 0])
+
+l <- subset_samples(ps_assn, typeSample == "leaf")
+lASVs <- colnames(l@otu_table[,colSums(l@otu_table) > 0])
+
+h <- subset_samples(ps_assn, typeSample == "head")
+hASVs <- colnames(h@otu_table[,colSums(h@otu_table) > 0])
+
+# create a set list for Venn Diagram
+mySet <- list(Debris = dASVs, Leaf = lASVs, Head = hASVs) 
+
+
+vd <- ggVennDiagram(mySet, label = "count", col = "gray") +
+    scale_fill_gradient(low="#c6daeb",high = "#2e5c85") +
+    guides(fill = 'none') +
+    scale_color_manual(values = c(rep("black",4)))
+#tiff("./figures/VD_type.tiff", width=11.5, height=11.5, units="cm", res=600)
+vd
+#dev.off()
+
+# unique & shared across tissue types
+(99)/totASVs
+(569+93+1517)/totASVs
+
+
+# for disease!
+h_lo <- subset_samples(h, DiseaseStatus == "Lo")
+h_hi <- subset_samples(h, DiseaseStatus == "Hi")
+hloASVs <- colnames(h_lo@otu_table[,colSums(h_lo@otu_table) > 0])
+hhiASVs <- colnames(h_hi@otu_table[,colSums(h_hi@otu_table) > 0])
+myDisSet <- list(Hi = hhiASVs, Lo = hloASVs) 
+vdDisease <- ggVennDiagram(myDisSet, label = "count", col = "gray") +
+    scale_fill_gradient(low="#c6daeb",high = "#2e5c85") +
+    guides(fill = 'none') +
+    scale_color_manual(values = c(rep("black",4))) +
+    ggtitle("b) ")
+#tiff("./figures/VD_disease.tiff", width=80, height=80, units="mm", res=300)
+vdDisease
+#dev.off()
+```
+
+
+
+# Hyp0 = MB ~ Tissue Types
+
+#### Remove Low Abundance Taxa & Variance Stabilizing Transformation 
+* alternative to rarefying data
+
+```{r, echo=FALSE, results='hide'}
+# remove ASVs with <5 reads
+ps <- ps_assn
+ps <- prune_taxa(taxa_sums(ps)>=5, ps)
+#sort(sample_sums(ps))
+
+# #DESeq2
+# dds <- phyloseq_to_deseq2(ps, ~ 1)
+# gmMeans <- apply(counts(dds), 1, gm_mean_protected)
+# dds <- estimateSizeFactors(dds, type = 'ratio', geoMeans = gmMeans)
+# dds <- estimateDispersions(dds, fitType = "local")
+# save(dds, file="./data/VarSamp_dds.RData")
+load("./data/VarSamp_dds.RData")
+#rowData(dds)
+#sizeFactors(dds)  
+plotDispEsts(dds)
+
+## VST & Euclidean of VST
+VST <- getVarianceStabilizedData(dds)
+VST <- t(VST)  #taxa as columns
+dist <- stats::dist(VST, method="euclidean")
+
+```
+
+
+## Structure Model
+```{r}
+# comm1 <- adonis2(VST ~ typeSample,
+#                     perm=199, method = "euclidean", data=SbyE,
+#                     binary = FALSE, by = "margin" )
+# comm1 
+rrpp1 <- lm.rrpp(VST ~ typeSample, iter = 999,
+                    print.progress = FALSE, data = SbyE, SS.type="III")
+anova(rrpp1, effect.type = "F")
+
+```
+
+* PERMANOVA/RRPP both show that community structure varies by tissue type. 
+* Confirmed by visual (PCoA), and also by Relative Abundance Figure of top Ten ASVs, and Venn Diagram. VERY CLEAR differences between tissue type
+* given the clear experimental design differences by tissue type - will now move to testing hypotheses within tissue types (then on specific hypotheses on transfers between tissues)
+
+## Richness Model
+```{r}
+rich1 <- glm.nb(Sdiv ~ typeSample, data=SbyE, link = "log", maxit = 1000)
+Anova(rich1)
+# par(mfrow=c(2,2))
+# plot(rich1)
+
+# VERY Non-linear Q-Q plot
+
+rich1a <- lm.rrpp(Sdiv ~ typeSample, iter = 999,
+                    print.progress = FALSE, data = SbyE, SS.type="III")
+anova(rich1a, effect.type = "F")
+```
+
+
+## PCoA
+
+```{r mainpcoa, include = FALSE}
+pcoa <- cmdscale(dist, eig =TRUE)
+
+expl_1 <- round(pcoa$eig[1] / sum(pcoa$eig), 3) * 100
+expl_1
+expl_2 <- round(pcoa$eig[2] / sum(pcoa$eig), 3) * 100 
+expl_2
+expl_3 <- round(pcoa$eig[3] / sum(pcoa$eig), 3) * 100 
+expl_3
+```
+
+#### Broken Stick Figure
+```{r, echo = FALSE, results = 'hide'}
+#Note - scale Total Variance of eigenvalues to 1 in bstick; cmdscale does not by default
+b.stick <- bstick(length(pcoa$eig), tot.var = sum(pcoa$eig))
+
+#plots eignevalues themselves
+ggplot() + geom_point(aes(x = seq(1,20,1), y=pcoa$eig[1:20]), size = 2) +
+    xlab('PCoA Axis') + ylab('Eigenvalue') +
+    #Kaiser-Guttman criterion, average of all eig-vals
+    geom_hline(aes(color= "Kaiser-Guttman", yintercept = mean(pcoa$eig)), 
+               linetype=2, linewidth=1.5) +
+    geom_line(aes(x= seq(1,20,1), y = b.stick[1:20], color = "Broken-Stick"), 
+               linetype=4, linewidth=1.5) +
+    scale_color_manual(name = "Criterion", 
+                       breaks = c("Kaiser-Guttman", "Broken-Stick"),
+                       values = c("Kaiser-Guttman"="blue", "Broken-Stick"="red")) +
+    theme(legend.position.inside = c(.7,.8))
+```
+
+* First 6 axes significant by both BS and KG method
+
+```{r, include = FALSE}
+# create dataframes for use in plots
+scores <- as.data.frame(pcoa$points)
+scores$ids <- rownames(scores) 
+#merge the temporary and SbyE dataframes
+pdat <- merge(scores, SbyE, by.x="ids",
+                  by.y="ID")
+rownames(pdat) <- as.character(pdat$ids)
+
+
+
+#create a standard error ellipse
+#set up a data frame before running the function.
+#loop, 
+#change pdat$____ to your var name, and same for =g at end
+#change name of ellipses.___ to name of dataframe above
+
+#site
+ell_site <- data.frame() 
+for(g in levels(pdat$site)){ 
+  ell_site <- rbind(ell_site, cbind(as.data.frame(with(
+    pdat[pdat$site==g,],  
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+         wt=rep(1/length(V1),length(V1)))$cov, 
+         center=c(mean(V1), mean(V2)))   )) , site=g))   } 
+
+# sample type
+ell_type <- data.frame() 
+for(g in levels(pdat$typeSample)){ 
+  ell_type <- rbind(ell_type, cbind(as.data.frame(with(
+    pdat[pdat$typeSample==g,],  
+    veganCovEllipse(cov.wt(cbind(V1, V2),
+         wt=rep(1/length(V1),length(V1)))$cov, 
+         center=c(mean(V1), mean(V2)))   )) , typeSample=g))   } 
+
+```
+
+#### Figure
+```{r, echo = FALSE, results = 'hide'}
+p_site <- ggplot() + coord_equal() + 
+    # geom_path(data = ell_site, aes(x = V1, y = V2, 
+    #       group = site, colour = site), linetype = 1, linewidth = 1.1,  
+    #       show.legend = TRUE) +
+    geom_point(data = pdat, aes(x = V1, y = V2, 
+          color = site) , size = 2) +
+    scale_colour_manual("", values = site_color) +
+    scale_x_continuous(paste("PCoA 1 (", expl_1, "%)", sep = "")) +
+    scale_y_continuous(paste("PCoA 2 (", expl_2, "%)", sep = ""))
+#p_site
+
+p_type <- ggplot() + coord_equal() + 
+    # geom_path(data = ell_type, aes(x = V1, y = V2, 
+    #       group = typeSample, colour = typeSample), linetype = 1, linewidth = 1.1,
+    #       show.legend = TRUE) +
+    geom_point(data = pdat, aes(x = V1, y = V2, 
+          color = typeSample, shape = site) , size = 2) +
+    scale_colour_manual("Tissue", values = type_color) +
+    scale_shape_discrete("Site") +
+    scale_x_continuous(paste("PCoA 1 (", expl_1, "%)", sep = "")) +
+    scale_y_continuous(paste("PCoA 2 (", expl_2, "%)", sep = "")) +
+    theme(legend.position = "bottom")
+
+
+#tiff("./figures/PCoA_Tissue.tiff", width=6, height=6, units = "in", res = 300)
+p_type
+#dev.off()
+```
+
+
+## Richness Figure
+
+```{r}
+rich_type <- ggplot(SbyE, aes(y = Sdiv, x = typeSample, fill = typeSample)) +
+    geom_boxplot(outlier.shape = NA) + scale_fill_manual(values = type_color) +
+    geom_jitter(width = .1) +
+    scale_x_discrete("Tissue Type") +
+    scale_y_continuous("Observed Richness") + guides(fill = 'none')
+    #theme(axis.text.x = element_text(angle = 60))
+#tiff("./figures/Sdiv_type.tiff", width=4, height=4, units="in", res=300)
+rich_type 
+#dev.off()
+```
+
+
+```{r, include = FALSE, fig.keep = 'none'}
+p_type2 <- p_type + guides(colour = 'none', shape = 'none')
+
+fig_type <- ggarrange(rich_type, p_type2, 
+          ncol = 2, nrow = 1,
+          widths = c(1, 1.25),
+          labels = c("a)", "b)"), 
+          label.args = list(gp=gpar(font=2, fontsize=12), 
+                            x=unit(1,"line"), hjust=1, vjust=.9) )
+
+
+#tiff("./figures/Diversity_type.tiff", width=16.5, height=7.5, units="cm", res=300)
+fig_type
+#dev.off()
+```
+
+
+```{r}
+sessionInfo()
+```
+
+
+
+
+###### end
