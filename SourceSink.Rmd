@@ -1,0 +1,795 @@
+---
+title: "Source Sink analysis"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+author: "Briana K. Whitaker"
+date: "`r Sys.Date()`"
+---
+\fontsize{9}{10}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning =FALSE, message=FALSE)
+```
+---
+
+
+
+* Run using `r version[['version.string']] `.
+
+
+## Objective
+This document reports on the **source sink analysis** for the Variety Sampling mycobiome data from samples collected in 2020 and 2021 in Ewing and Urbana Illinois.
+
+### Notes
+* FEAST - fast expectation-maximization for microbial source tracking
+* 1000 iterations default, 
+* rarefied to min depth w/in each source-sink group ('id' in map file)
+* removed taxa with < 5 reads (removes 163 taxa from analysis)
+
+```{r PRELOAD, echo=FALSE, results='hide', include=FALSE} 
+#require(devtools)
+#devtools::install_github("cozygene/FEAST")
+x<-c("ggplot2", "phyloseq", "tidyr", "dplyr", "DESeq2", "car", "egg", "grid",
+     "betareg", "emmeans")
+lapply(x, require, character.only = TRUE)
+
+
+#Load functions
+source("./code/multiplot.function.R")
+#add 'not in' function
+`%nin%` = Negate(`%in%`)
+# geometric mean
+gm_mean_protected <- function(x) {
+  if (all(x == 0)) {
+    return (0)
+  }
+  exp(mean(log(x[x != 0])))
+}
+
+
+get_plot <- function(x) strsplit(basename(
+                            strsplit(basename(x), "_")[[1]][1]), "-")[[1]][1]
+
+myMEAN <- function(x) {
+    x1 <- na.omit(x)  #number of omitted values length(attr(test,"na.action"))
+    MEAN <- mean(x1)
+}
+
+#set seed
+set.seed(242)
+
+# set ggplot2 theme
+theme_set(theme_bw(base_size=12)) 
+theme_update(panel.grid.major=element_line(0), panel.grid.minor=element_line(0))
+
+# color palettes
+type_color <- c("#A65628", "#984EA3", "#4DAF4A")
+site_color <- c("#8DD3C7", "#FB8072")
+time_color <- c("#bbdb15", "#ABDDA4", "#66C2A5", "#3288BD", "#5E4FA2")
+dis_color <- c("#D95F02", "#1B9E77")
+```
+
+# Load Phyloseq
+```{r}
+load("./data/VarSamp_ps_assn.RData")
+ps_assn
+
+# remove ASVs with <5 reads
+ps <- ps_assn
+ps <- prune_taxa(taxa_sums(ps)>=5, ps) # removes 163 taxa
+ps
+
+# load deseq
+load("./data/VarSamp_dds.RData")
+#plotDispEsts(dds)
+
+## VST & Euclidean of VST
+VST <- getVarianceStabilizedData(dds)
+VST <- t(VST)  #taxa as columns
+dist <- stats::dist(VST, method="euclidean")
+
+```
+
+```{r, echo=FALSE, results='hide', include=FALSE}
+# create SbyE and SbyS from removed-low-abun-taxa phyloseq
+SbyS <- (as(otu_table(ps), "matrix"))
+SbyE <- read.csv("./data/VarSamp_SbyE_simplified.csv", row.names = 1, 
+                 stringsAsFactors = TRUE)
+        #(as(sample_data(ps), "data.frame"))
+rownames(SbyE) <- SbyE$ID
+
+# sanity check, must be true
+identical(sort(rownames(SbyE)), sort(rownames(ps@otu_table)))
+```
+
+
+```{r}
+#filtering already applied, no VST in this version #samples as rows for FEAST
+otu <- otu_table(ps)@.Data  
+# dim(otu)
+# #[1]  219 2417
+map <- SbyE
+#identical(rownames(map), rownames(feast_otu)) # sanity check
+```
+
+
+
+
+# Source-Sink b/w timepoints
+* for this analysis, only considering one potential source at a time, and the estimated unknown source. The one potential source is always the same plot and sample type from the previous time point.
+
+### Debris
+```{r}
+#create a mapping file for use with FEAST
+map_d <- map %>% 
+    filter(typeSample == 'debris') %>%
+    mutate(Env = timeSample) %>%
+    mutate(SampleID = ID) %>%
+    mutate(SourceSink = ifelse(timeSample == "T2", "Sink", "Source")) %>%
+    mutate(id = as.numeric(plotID)) %>%
+    dplyr::select(SampleID, Env, SourceSink, id) %>%
+    droplevels %>%
+    arrange(id)
+#head(map_d)
+#remove [any] extraneous samples from OTU matrix
+otu_d <- otu[rownames(otu) %in% map_d$SampleID,]  
+#identical(rownames(map_d), rownames(otu_d)) # sanity check
+
+# # run FEAST, 
+# feast_d <- FEAST(C = otu_d, metadata = map_d, different_sources_flag = 1,
+#       dir_path = "~/GitHubRepos/VarSamp-WWheat/data", outfile = "VarSamp_d")
+out_d <- read.delim(
+    "~/GitHubRepos/Whitaker_Gdanetz_etal_WheatFHBMicrobiome/tables/VarSamp_d_source_contributions_matrix.txt")
+```
+
+### Head
+```{r}
+#create a mapping file for use with FEAST
+map_h <- map %>% 
+    filter(typeSample == 'head')
+
+
+### Time3 to Time4
+map_t34_h <- map_h %>%
+    filter(timeSample != "T5") %>%
+    mutate(Env = timeSample) %>%
+    mutate(SampleID = ID) %>%
+    mutate(SourceSink = ifelse(timeSample == "T4", "Sink", "Source")) %>%
+    mutate(id = as.numeric(plotID)) %>%
+    dplyr::select(SampleID, Env, SourceSink, id) %>%
+    droplevels %>%
+    arrange(id)
+#dim(map_t34_h)
+#remove [any] extraneous samples from OTU matrix
+otu_t34_h <- otu[rownames(otu) %in% map_t34_h$SampleID,]  
+#identical(rownames(map_t34_h), rownames(otu_t34_h)) # sanity check
+
+# # run FEAST, 
+# feast_t34_h <- FEAST(C = otu_t34_h, metadata = map_t34_h, different_sources_flag = 1,
+#       dir_path = "~/GitHubRepos/VarSamp-WWheat/data", outfile = "VarSamp_t34_h")
+out_t34_h <- read.delim(
+    "~/GitHubRepos/Whitaker_Gdanetz_etal_WheatFHBMicrobiome/tables/VarSamp_t34_h_source_contributions_matrix.txt")
+
+
+### Time4 to Time5  - Low disease heads
+map_t45_lo_h <- map_h %>%
+    filter(timeSample != "T3") %>%
+    filter(DiseaseStatus != "Hi") %>%
+    mutate(Env = timeSample) %>%
+    mutate(SampleID = ID) %>%
+    mutate(SourceSink = ifelse(timeSample == "T5", "Sink", "Source")) %>%
+    mutate(id = as.numeric(plotID)) %>%
+    dplyr::select(SampleID, Env, SourceSink, id) %>%
+    droplevels %>%
+    arrange(id)
+#head(map_t45_lo_h)
+#remove [any] extraneous samples from OTU matrix
+otu_t45_lo_h <- otu[rownames(otu) %in% map_t45_lo_h$SampleID,]  
+#identical(rownames(map_t45_lo_h), rownames(otu_t45_lo_h)) # sanity check
+
+# # run FEAST, 
+# feast_t45_lo_h <- FEAST(C = otu_t45_lo_h, metadata = map_t45_lo_h, different_sources_flag = 1,
+#       dir_path = "~/GitHubRepos/VarSamp-WWheat/data", outfile = "VarSamp_t45_lo_h")
+out_t45_lo_h <- read.delim(
+    "~/GitHubRepos/Whitaker_Gdanetz_etal_WheatFHBMicrobiome/tables/VarSamp_t45_lo_h_source_contributions_matrix.txt")
+
+
+### Time4 to Time5  - High disease heads
+map_t45_hi_h <- map_h %>%
+    filter(timeSample != "T3") %>%
+    filter(DiseaseStatus != "Lo") %>%
+    mutate(Env = timeSample) %>%
+    mutate(SampleID = ID) %>%
+    mutate(SourceSink = ifelse(timeSample == "T5", "Sink", "Source")) %>%
+    mutate(id = as.numeric(plotID)) %>%
+    dplyr::select(SampleID, Env, SourceSink, id) %>%
+    droplevels %>%
+    arrange(id)
+#head(map_t45_hi_h)
+#remove [any] extraneous samples from OTU matrix
+otu_t45_hi_h <- otu[rownames(otu) %in% map_t45_hi_h$SampleID,]  
+#identical(rownames(map_t45_hi_h), rownames(otu_t45_hi_h)) # sanity check
+
+# # run FEAST, 
+# feast_t45_hi_h <- FEAST(C = otu_t45_hi_h, metadata = map_t45_hi_h, different_sources_flag = 1,
+#       dir_path = "~/GitHubRepos/VarSamp-WWheat/data", outfile = "VarSamp_t45_hi_h")
+out_t45_hi_h <- read.delim(
+    "~/GitHubRepos/Whitaker_Gdanetz_etal_WheatFHBMicrobiome/tables/VarSamp_t45_hi_h_source_contributions_matrix.txt")
+```
+
+
+
+### Leaf
+```{r}
+#create a mapping file for use with FEAST
+map_l <- map %>% 
+    filter(typeSample == 'leaf')
+
+
+### Time1 to Time2
+map_t12_l <- map_l %>%
+    filter(timeSample != "T3") %>% filter(timeSample != "T4") %>%
+    mutate(Env = timeSample) %>%
+    mutate(SampleID = ID) %>%
+    mutate(SourceSink = ifelse(timeSample == "T2", "Sink", "Source")) %>%
+    mutate(id = as.numeric(plotID)) %>%
+    dplyr::select(SampleID, Env, SourceSink, id) %>%
+    droplevels %>%
+    arrange(id)
+#head(map_t12_l)
+#table(map_t12_l$id)
+nopairs_t12_l <- c(3,4,7,9,15,17,22)
+map_t12_l <- map_t12_l %>% filter(id %nin%  nopairs_t12_l)
+#remove [any] extraneous samples from OTU matrix
+otu_t12_l <- otu[rownames(otu) %in% map_t12_l$SampleID,]  
+#identical(rownames(map_t12_l), rownames(otu_t12_l)) # sanity check
+
+# # run FEAST, 
+# feast_t12_l <- FEAST(C = otu_t12_l, metadata = map_t12_l, different_sources_flag = 1,
+#       dir_path = "~/GitHubRepos/VarSamp-WWheat/data", outfile = "VarSamp_t12_l")
+out_t12_l <- read.delim(
+    "~/GitHubRepos/Whitaker_Gdanetz_etal_WheatFHBMicrobiome/tables/VarSamp_t12_l_source_contributions_matrix.txt")
+
+
+### Time2 to Time3
+map_t23_l <- map_l %>%
+    filter(timeSample != "T1") %>% filter(timeSample != "T4") %>%
+    mutate(Env = timeSample) %>%
+    mutate(SampleID = ID) %>%
+    mutate(SourceSink = ifelse(timeSample == "T3", "Sink", "Source")) %>%
+    mutate(id = as.numeric(plotID)) %>%
+    dplyr::select(SampleID, Env, SourceSink, id) %>%
+    droplevels %>%
+    arrange(id)
+#head(map_t23_l)
+#table(map_t23_l$id)
+nopairs_t23_l <- c(6,7,12,22)
+map_t23_l <- map_t23_l %>% filter(id %nin%  nopairs_t23_l)
+#remove [any] extraneous samples from OTU matrix
+otu_t23_l <- otu[rownames(otu) %in% map_t23_l$SampleID,]  
+#identical(rownames(map_t23_l), rownames(otu_t23_l)) # sanity check
+
+# # run FEAST, 
+# feast_t23_l <- FEAST(C = otu_t23_l, metadata = map_t23_l, different_sources_flag = 1,
+#       dir_path = "~/GitHubRepos/VarSamp-WWheat/data", outfile = "VarSamp_t23_l")
+out_t23_l <- read.delim(
+    "~/GitHubRepos/Whitaker_Gdanetz_etal_WheatFHBMicrobiome/tables/VarSamp_t23_l_source_contributions_matrix.txt")
+
+
+### Time3 to Time4
+map_t34_l <- map_l %>%
+    filter(timeSample != "T1") %>% filter(timeSample != "T2") %>%
+    mutate(Env = timeSample) %>%
+    mutate(SampleID = ID) %>%
+    mutate(SourceSink = ifelse(timeSample == "T4", "Sink", "Source")) %>%
+    mutate(id = as.numeric(plotID)) %>%
+    dplyr::select(SampleID, Env, SourceSink, id) %>%
+    droplevels %>%
+    arrange(id)
+#head(map_t34_l)
+#table(map_t34_l$id)
+nopairs_t34_l <- c(3,4,6,11,12,13,19,20,22)
+map_t34_l <- map_t34_l %>% filter(id %nin%  nopairs_t34_l) #only 14 pairs left here
+#remove [any] extraneous samples from OTU matrix
+otu_t34_l <- otu[rownames(otu) %in% map_t34_l$SampleID,]  
+#identical(rownames(map_t34_l), rownames(otu_t34_l)) # sanity check
+
+# # run FEAST, 
+# feast_t34_l <- FEAST(C = otu_t34_l, metadata = map_t34_l, different_sources_flag = 1,
+#       dir_path = "~/GitHubRepos/VarSamp-WWheat/data", outfile = "VarSamp_t34_l")
+out_t34_l <- read.delim(
+    "~/GitHubRepos/Whitaker_Gdanetz_etal_WheatFHBMicrobiome/tables/VarSamp_t34_l_source_contributions_matrix.txt")
+```
+
+### create df
+```{r, include = FALSE}
+# Debris
+ss_bw_d <- 
+    data.frame(K_T1 = diag(as.matrix(out_d[,-c(dim(out_d)[2])])),
+               U_T1 = out_d[,c(dim(out_d)[2])])
+ss_bw_d$ID <- sapply(row.names(out_d), get_plot)
+# Head
+ss_bw_t34_h <- 
+    data.frame(K_T3 = diag(as.matrix(out_t34_h[,-c(dim(out_t34_h)[2])])),
+               U_T3 = out_t34_h[,c(dim(out_t34_h)[2])])
+ss_bw_t34_h$ID <- sapply(row.names(out_t34_h), get_plot)
+ss_bw_t45_lo_h <- 
+    data.frame(K_Lo_T4 = diag(as.matrix(out_t45_lo_h[,-c(dim(out_t45_lo_h)[2])])),
+               U_Lo_T4 = out_t45_lo_h[,c(dim(out_t45_lo_h)[2])])
+ss_bw_t45_lo_h$ID <- sapply(row.names(out_t45_lo_h), get_plot)
+ss_bw_t45_hi_h <- 
+    data.frame(K_Hi_T4 = diag(as.matrix(out_t45_hi_h[,-c(dim(out_t45_hi_h)[2])])),
+               U_Hi_T4 = out_t45_hi_h[,c(dim(out_t45_hi_h)[2])])
+ss_bw_t45_hi_h$ID <- sapply(row.names(out_t45_hi_h), get_plot)
+ss_bw_h <- merge(merge(ss_bw_t34_h, ss_bw_t45_lo_h, by.x = "ID", all = TRUE), 
+                         ss_bw_t45_hi_h, by = "ID", all = TRUE)
+# Leaf
+ss_bw_t12_l <- 
+    data.frame(K_T1 = diag(as.matrix(out_t12_l[,-c(dim(out_t12_l)[2])])),
+               U_T1 = out_t12_l[,c(dim(out_t12_l)[2])])
+ss_bw_t12_l$ID <- sapply(row.names(out_t12_l), get_plot)
+ss_bw_t23_l <- 
+    data.frame(K_T2 = diag(as.matrix(out_t23_l[,-c(dim(out_t23_l)[2])])),
+               U_T2 = out_t23_l[,c(dim(out_t23_l)[2])])
+ss_bw_t23_l$ID <- sapply(row.names(out_t23_l), get_plot)
+ss_bw_t34_l <- 
+    data.frame(K_T3 = diag(as.matrix(out_t34_l[,-c(dim(out_t34_l)[2])])),
+               U_T3 = out_t34_l[,c(dim(out_t34_l)[2])])
+ss_bw_t34_l$ID <- sapply(row.names(out_t34_l), get_plot)
+ss_bw_l <- merge(merge(ss_bw_t12_l, ss_bw_t23_l, by.x = "ID", all = TRUE), 
+                         ss_bw_t34_l, by = "ID", all = TRUE)
+#rename columns
+colnames(ss_bw_d) <- paste("D_", colnames(ss_bw_d), sep = "")
+ss_bw_d$D_ID <- substr(ss_bw_d$D_ID, 2, 3)
+colnames(ss_bw_h) <- paste("H_", colnames(ss_bw_h), sep = "")
+ss_bw_h$H_ID <- substr(ss_bw_h$H_ID, 2, 3)
+colnames(ss_bw_l) <- paste("L_", colnames(ss_bw_l), sep = "")
+ss_bw_l$L_ID <- substr(ss_bw_l$L_ID, 2, 3)
+
+#merge & pivot longer
+ss_bw <- merge(merge(ss_bw_d, ss_bw_h, by.x = "D_ID", by.y = "H_ID", all = TRUE),
+                     ss_bw_l, by.x = "D_ID", by.y = "L_ID", all = TRUE)
+ss_bw %>% pivot_longer(!D_ID, names_to = c("Type"), 
+                       values_to = "Source") -> ss_bw_w
+#write.csv(ss_bw_w, "../data/VarSamp_sourceSink_betweenTimes_wide.csv")
+ss_bw_w <- read.csv("./data/VarSamp_sourceSink_betweenTimes_wide-edit.csv",
+                    row.names=1)
+ss_bw_w$Type <- ifelse(ss_bw_w$Type == "K", "Known", "Unknown")
+#ss_bw_w$DiseaseT5 <- as.factor(ss_bw_w$DiseaseT5)
+
+#str(ss_bw_w)
+
+# split data up
+ss_bw_w %>% filter(Tissue == "D") %>% droplevels() -> ss_bw_w_debris
+ss_bw_w %>% filter(Tissue == "L") %>% droplevels() -> ss_bw_w_leaf
+ss_bw_w %>% filter(Tissue == "H") %>% droplevels() -> ss_bw_w_head
+table(ss_bw_w_head$TimeSource, ss_bw_w_head$DiseaseT5)
+# DiseaseT5 is semi-nested in TimeSource???
+ss_bw_w_head$TimeDisease <- paste(ss_bw_w_head$TimeSource, ss_bw_w_head$DiseaseT5, sep = "_")
+
+```
+
+* Note that T4 source test includes technically 2 different T5 sinks in head tissue, representing the Lo and Hi disease
+* choosing to keep all these source-sink comparisons in one model for heads BECAUSE, technically testing T4 as a source twice, which should therefore be accounted for in the post-hoc Type 1 error correction
+
+### For MS
+```{r}
+tapply(ss_bw_w_debris$Source, 
+       list(ss_bw_w_debris$TimeSource, ss_bw_w_debris$Type), myMEAN)
+tapply(ss_bw_w_leaf$Source, 
+       list(ss_bw_w_leaf$TimeSource, ss_bw_w_leaf$Type), myMEAN)
+
+tapply(ss_bw_w_head$Source, 
+       list(ss_bw_w_head$Type, ss_bw_w_head$DiseaseT5, ss_bw_w_head$TimeSource), myMEAN)
+
+
+```
+
+### Figure
+* visually slightly more unknown source contribution to low disease heads at T5, or conversely, slightly less known source contribution from T4 heads to low disease heads at T5 (relative to high disease heads)
+* A LOT more variation in known and unknown source contributions between time points for leaves
+```{r, echo = FALSE, results = 'hide'}
+my_dodge <- 0.8
+pd <- position_dodge(my_dodge) 
+jitter_pd <- position_jitterdodge(jitter.width = 0.15, dodge.width = my_dodge)
+
+vrbl.names <- c("D" = 'Debris',
+                "H" = 'Head',
+                "L" = 'Leaf'   )
+
+bwTime <- ggplot(ss_bw_w, 
+                 aes(x = Type, y = Source, colour = TimeSource, shape = DiseaseT5)) +
+    facet_grid(.~Tissue, labeller = labeller(Tissue = vrbl.names)) +
+    geom_boxplot(position = pd, outlier.shape = NA) +
+    geom_point(position = jitter_pd, size = 1.3) +
+    scale_colour_manual("Timepoint Source", 
+                        values = time_color[1:4]) +
+    scale_shape_discrete("Sink Disease") +
+    scale_y_continuous("Estimated Source Proportion", limits = c(0,1.1),
+                       breaks = c(0.00,0.25,0.50, 0.75, 1.00)) +
+    scale_x_discrete("") +
+    theme(legend.position = "bottom", axis.title.x = element_blank(),
+          plot.margin = margin(2,2,0,2, "mm"),
+          legend.title=element_text(size=11),
+          legend.margin = margin(0,0,0,0, "mm"),
+          legend.spacing.x = unit(3, "mm")) 
+    #stat_summary(fun.y = 'mean', geom = 'point', shape =23, size = 4, 
+    #             fill = "gray20", position = pd)
+#tiff("./figures/SourceSink_bwTimes.tiff", width=16.5, height=8.8, units="cm", res=300)
+bwTime
+#dev.off()
+```
+
+# Source-Sink w/in time points, but b/w tissue types
+* for this analysis, only considering one potential source at a time, and the estimated unknown source. The one potential source is always the same plot and same time point, but between tissue types.
+
+### T1
+```{r}
+#create a mapping file for use with FEAST
+map_t1 <- map %>% 
+    filter(timeSample == 'T1') %>%
+    mutate(Env = typeSample) %>%
+    mutate(SampleID = ID) %>%
+    mutate(SourceSink = ifelse(typeSample == "leaf", "Sink", "Source")) %>%
+    mutate(id = as.numeric(plotID)) %>%
+    dplyr::select(SampleID, Env, SourceSink, id) %>%
+    droplevels %>%
+    arrange(id)
+#head(map_t1)
+#table(map_t1$id)
+nopairs_t1 <- c(3,6,15,17)
+map_t1 <- map_t1 %>% filter(id %nin%  nopairs_t1)
+#remove [any] extraneous samples from OTU matrix
+otu_t1 <- otu[rownames(otu) %in% map_t1$SampleID,]  
+#identical(sort(rownames(map_t1)), sort(rownames(otu_t1))) # sanity check
+
+# # run FEAST, 
+# feast_t1 <- FEAST(C = otu_t1, metadata = map_t1, different_sources_flag = 1,
+#       dir_path = "~/GitHubRepos/VarSamp-WWheat/data", outfile = "VarSamp_t1")
+out_t1 <- read.delim(
+    "~/GitHubRepos/Whitaker_Gdanetz_etal_WheatFHBMicrobiome/tables/VarSamp_t1_source_contributions_matrix.txt")
+```
+
+### T2
+```{r}
+#create a mapping file for use with FEAST
+map_t2 <- map %>% 
+    filter(timeSample == 'T2') %>%
+    mutate(Env = typeSample) %>%
+    mutate(SampleID = ID) %>%
+    mutate(SourceSink = ifelse(typeSample == "leaf", "Sink", "Source")) %>%
+    mutate(id = as.numeric(plotID)) %>%
+    dplyr::select(SampleID, Env, SourceSink, id) %>%
+    droplevels %>%
+    arrange(id)
+#head(map_t2)
+#table(map_t2$id)
+nopairs_t2 <- c(4,6,7,9,22)
+map_t2 <- map_t2 %>% filter(id %nin%  nopairs_t2)
+#remove [any] extraneous samples from OTU matrix
+otu_t2 <- otu[rownames(otu) %in% map_t2$SampleID,]  
+#identical(sort(rownames(map_t2)), sort(rownames(otu_t2))) # sanity check
+
+# # run FEAST, 
+# feast_t2 <- FEAST(C = otu_t2, metadata = map_t2, different_sources_flag = 1,
+#       dir_path = "~/GitHubRepos/VarSamp-WWheat/data", outfile = "VarSamp_t2")
+out_t2 <- read.delim(
+    "~/GitHubRepos/Whitaker_Gdanetz_etal_WheatFHBMicrobiome/tables/VarSamp_t2_source_contributions_matrix.txt")
+```
+
+### T3
+```{r}
+#create a mapping file for use with FEAST
+map_t3 <- map %>% 
+    filter(timeSample == 'T3') %>%
+    mutate(Env = typeSample) %>%
+    mutate(SampleID = ID) %>%
+    mutate(SourceSink = ifelse(typeSample == "head", "Sink", "Source")) %>%
+    mutate(id = as.numeric(plotID)) %>%
+    dplyr::select(SampleID, Env, SourceSink, id) %>%
+    droplevels %>%
+    arrange(id)
+#head(map_t3)
+#table(map_t3$id)
+nopairs_t3 <- c(4,9,12)
+map_t3 <- map_t3 %>% filter(id %nin%  nopairs_t3)
+#remove [any] extraneous samples from OTU matrix
+otu_t3 <- otu[rownames(otu) %in% map_t3$SampleID,]  
+#identical(sort(rownames(map_t3)), sort(rownames(otu_t3))) # sanity check
+
+# # run FEAST, 
+# feast_t3 <- FEAST(C = otu_t3, metadata = map_t3, different_sources_flag = 1,
+#       dir_path = "~/GitHubRepos/VarSamp-WWheat/data", outfile = "VarSamp_t3")
+out_t3 <- read.delim(
+    "~/GitHubRepos/Whitaker_Gdanetz_etal_WheatFHBMicrobiome/tables/VarSamp_t3_source_contributions_matrix.txt")
+```
+
+### T4
+```{r}
+#create a mapping file for use with FEAST
+map_t4 <- map %>% 
+    filter(timeSample == 'T4') %>%
+    mutate(Env = typeSample) %>%
+    mutate(SampleID = ID) %>%
+    mutate(SourceSink = ifelse(typeSample == "head", "Sink", "Source")) %>%
+    mutate(id = as.numeric(plotID)) %>%
+    dplyr::select(SampleID, Env, SourceSink, id) %>%
+    droplevels %>%
+    arrange(id)
+#head(map_t4)
+#table(map_t4$id)
+nopairs_t4 <- c(3,4,6,9,11,13,19,20,22)
+map_t4 <- map_t4 %>% filter(id %nin%  nopairs_t4)
+#remove [any] extraneous samples from OTU matrix
+otu_t4 <- otu[rownames(otu) %in% map_t4$SampleID,]  
+#identical(sort(rownames(map_t4)), sort(rownames(otu_t4))) # sanity check
+
+# # run FEAST, 
+# feast_t4 <- FEAST(C = otu_t4, metadata = map_t4, different_sources_flag = 1,
+#       dir_path = "~/GitHubRepos/VarSamp-WWheat/data", outfile = "VarSamp_t4")
+out_t4 <- read.delim(
+    "~/GitHubRepos/Whitaker_Gdanetz_etal_WheatFHBMicrobiome/tables/VarSamp_t4_source_contributions_matrix.txt")
+```
+
+
+### create df
+```{r, include = FALSE}
+# T1
+ss_wi_t1 <- 
+    data.frame(K_T1 = diag(as.matrix(out_t1[,-c(dim(out_t1)[2])])),
+               U_T1 = out_t1[,c(dim(out_t1)[2])])
+ss_wi_t1$ID <- substr(sapply(row.names(out_t1), get_plot),2,3)
+# T2
+ss_wi_t2 <- 
+    data.frame(K_T2 = diag(as.matrix(out_t2[,-c(dim(out_t2)[2])])),
+               U_T2 = out_t2[,c(dim(out_t2)[2])])
+ss_wi_t2$ID <- substr(sapply(row.names(out_t2), get_plot),2,3)
+# T3
+ss_wi_t3 <- 
+    data.frame(K_T3 = diag(as.matrix(out_t3[,-c(dim(out_t3)[2])])),
+               U_T3 = out_t3[,c(dim(out_t3)[2])])
+ss_wi_t3$ID <- substr(sapply(row.names(out_t3), get_plot),2,3)
+# T4
+ss_wi_t4 <- 
+    data.frame(K_T4 = diag(as.matrix(out_t4[,-c(dim(out_t4)[2])])),
+               U_T4 = out_t4[,c(dim(out_t4)[2])])
+ss_wi_t4$ID <- substr(sapply(row.names(out_t4), get_plot),2,3)
+
+#merge & pivot longer
+ss_wi <- merge(merge(merge(ss_wi_t1, ss_wi_t2, by.x = "ID", by.y = "ID", all = TRUE),
+                           ss_wi_t3, by.x = "ID", by.y = "ID", all = TRUE),
+                           ss_wi_t4, by.x = "ID", by.y = "ID", all = TRUE)
+ss_wi %>% pivot_longer(!ID, names_to = c("Type"), 
+                       values_to = "Source") -> ss_wi_w
+#write.csv(ss_wi_w, "../data/VarSamp_sourceSink_withinTimes_wide.csv")
+ss_wi_w <- read.csv("./data/VarSamp_sourceSink_withinTimes_wide-edit.csv",
+                    row.names=1)
+ss_wi_w$Type <- ifelse(ss_wi_w$Type == "K", "Known", "Unknown")
+ss_wi_w$TissueSource <- as.factor(ss_wi_w$TissueSource)
+levels(ss_wi_w$TissueSource) <- c("Debris", "Leaf")
+
+
+# split data up
+ss_wi_w %>% filter(TissueSource == "Leaf") -> ss_wi_w_leafToHead
+ss_wi_w %>% filter(TissueSource == "Debris") -> ss_wi_w_debrisToLeaf
+
+```
+
+### For MS
+```{r}
+tapply(ss_wi_w_debrisToLeaf$Source, 
+       list(ss_wi_w_debrisToLeaf$Time, ss_wi_w_debrisToLeaf$Type), myMEAN)
+tapply(ss_wi_w_leafToHead$Source, 
+       list(ss_wi_w_leafToHead$Time, ss_wi_w_leafToHead$Type), myMEAN)
+```
+
+### Figure
+* Corn Debris is a major source of fungi to wheat leaves ONLY at the earliest life stage, not post winter.
+* Wheat leaves are not a major source of fungi to wheat heads (within the same time point)
+```{r, echo = FALSE, results = 'hide'}
+wiTime <- ggplot(ss_wi_w, aes(x = Type, y = Source, colour = TissueSource)) +
+    facet_grid(.~Time) +
+    geom_boxplot(position = pd, outlier.shape = NA) +
+    geom_point(position = jitter_pd, size = 1.3) +
+    scale_colour_manual("Tissue Type Source",
+                        values = type_color[c(1,3)])  +
+    scale_y_continuous("Estimated Source Proportion", limits = c(0,1.1),
+                       breaks = c(0.00,0.25,0.50, 0.75, 1.00)) +
+    scale_x_discrete("") +
+    theme(legend.position = "bottom", axis.title.x = element_blank(),
+          plot.margin = margin(2,2,0,2, "mm"),
+          legend.title=element_text(size=11),
+          legend.margin = margin(0,0,0,0, "mm"))
+    #stat_summary(fun.y = 'mean', geom = 'point', shape =23, size = 4, 
+    #             fill = "gray20", position = pd)
+
+#tiff("./figures/SourceSink_wiTimes.tiff", width = 16.5, height = 8.8, units="cm", res=300)
+wiTime
+#dev.off()
+
+
+debrisToLeaf <- ggplot(ss_wi_w_debrisToLeaf, aes(x = Type, y = Source, 
+                                                 colour = TissueSource)) +
+    facet_grid(.~Time) +
+    geom_boxplot(position = pd, outlier.shape = NA) +
+    geom_point(position = jitter_pd, size = 1.3) +
+    scale_colour_manual("Tissue Type Source",
+                        values = type_color[c(1)])  +
+    scale_y_continuous("Estimated Source Proportion", limits = c(0,1.1),
+                       breaks = c(0.00,0.25,0.50, 0.75, 1.00)) +
+    scale_x_discrete("") +
+    theme(legend.position = "bottom", axis.title.x = element_blank(),
+          plot.margin = margin(2,2,0,2, "mm"),
+          legend.title=element_text(size=11),
+          legend.margin = margin(0,0,0,0, "mm"))
+
+#tiff("./figures/SourceSink_wiTimes_DtoL.tiff", width = 8.25, height = 8.8, units="cm", res=300)
+debrisToLeaf
+#dev.off()
+
+leafToHead <- ggplot(ss_wi_w_leafToHead, aes(x = Type, y = Source, 
+                                                 colour = TissueSource)) +
+    facet_grid(.~Time) +
+    geom_boxplot(position = pd, outlier.shape = NA) +
+    geom_point(position = jitter_pd, size = 1.3) +
+    scale_colour_manual("Tissue Type Source",
+                        values = type_color[c(3)])  +
+    scale_y_continuous("Estimated Source Proportion", limits = c(0,1.1),
+                       breaks = c(0.00,0.25,0.50, 0.75, 1.00)) +
+    scale_x_discrete("") +
+    theme(legend.position = "bottom", axis.title.x = element_blank(),
+          plot.margin = margin(2,2,0,2, "mm"),
+          legend.title=element_text(size=11),
+          legend.margin = margin(0,0,0,0, "mm"))
+
+#tiff("./figures/SourceSink_wiTimes_LtoH.tiff", width = 8.25, height = 8.8, units="cm", res=300)
+leafToHead
+#dev.off()
+```
+
+# Figure - Manuscript
+```{r, include = FALSE, fig.keep='none'}
+#tiff("./figures/SourceSink_all.tiff", width = 16.5, height = 15.5, units="cm", res=300)
+grid.arrange(
+    grobs = list(debrisToLeaf, leafToHead, bwTime),
+    widths = c(1, 1), heights = c(1,1),
+    layout_matrix = rbind(c(1, 2), c(3, 3)) )
+#dev.off()
+```
+
+# Models
+* Using Betareg distribution, because source proportion is bounded between 0 and 1 (non-normal distribution)
+* betareg package, with ML estimator, logit link function, with phi precision parameter treated as nuisance parameter rathan than full model parm
+* extended support beta mixture distribution is BRAND new (Kosmidis & Zeileis 2024 arXiv)
+```{r, include = FALSE}
+hist(ss_wi_w_debrisToLeaf$Source)
+# source proportion is bounded between 0 and 1, should not use a normal model
+par(mfrow=c(2,2))
+
+range(sort(ss_bw_w_leaf$Source))
+range(sort(ss_wi_w_debrisToLeaf$Source))
+```
+
+### W/I timepoints - tissue type transfers
+```{r}
+# leaf to heads
+lf2h <- betareg(Source ~ Type*Time, data = ss_wi_w_leafToHead, 
+        phi = FALSE, link = "logit", na.action = na.omit, type = "ML")
+Anova(lf2h, type = 2)
+summary(lf2h)$pseudo.r.squared 
+#summary(lf2h)
+#plot(lf2h)
+
+
+
+# Debris to Leaf
+deb2lf1 <- betareg(Source ~ Type*Time, data = ss_wi_w_debrisToLeaf, 
+        link = "logit", na.action = na.omit, type = "ML",
+        dist = 'xbetax')
+deb2lf2 <- betareg(Source ~ Type*Time, data = ss_wi_w_debrisToLeaf, 
+        link = "logit", na.action = na.omit, type = "ML",
+        dist = 'xbetax', phi = FALSE)
+sapply(list(deb2lf1, deb2lf2), AIC)  #same, so PHI parm is signif, but not necessary to overall model fit?
+Anova(deb2lf2, type = 2)
+#summary(deb2lf2)$pseudo.r.squared #not yet supported for xbetax
+#summary(deb2lf2)
+#par(mfrow=c(1,2)); plot(deb2lf2); par(mfrow=c(1,1))
+
+```
+
+
+### B/W timepoints - timepoint transfers
+```{r}
+# Debris (only one timepoint transfter test)
+debTime <- betareg(Source ~ Type, data = ss_bw_w_debris, 
+        phi = FALSE, link = "logit", na.action = na.omit, type = "ML")
+Anova(debTime, type = 2)
+summary(debTime)$pseudo.r.squared 
+#summary(debTime)
+#plot(debTime)
+
+
+
+# Head (two timepoint transfers, but also two diff disease status in T5 sink)
+headTime <- betareg(Source ~ Type*TimeDisease, data = ss_bw_w_head, 
+        phi = FALSE, link = "logit", na.action = na.omit, type = "ML")
+Anova(headTime, type = 2)
+summary(headTime)$pseudo.r.squared 
+#summary(headTime)
+#plot(headTime)
+
+
+
+# Leaf (three timepoint transfers)
+ ## NOTE - source [0,1] contains 0 and 1 source proportions, so need extended support beta mixture distribution
+lfTime1 <- betareg(Source ~ Type*TimeSource, data = ss_bw_w_leaf, 
+        link = "logit", na.action = na.omit, type = "ML",
+        dist = 'xbetax') #, control = betareg.control(start = list(phi = 0))
+lfTime2 <- betareg(Source ~ Type*TimeSource, data = ss_bw_w_leaf, 
+        link = "logit", na.action = na.omit, type = "ML",
+        dist = 'xbetax', phi = FALSE) #, control = betareg.control(start = list(phi = 0))
+sapply(list(lfTime1, lfTime2), AIC)  #same, so PHI parm is signif, but not necessary to overall model fit?
+Anova(lfTime2, type = 2)
+#summary(lfTime2)$pseudo.r.squared    #not yet supported for xbetax
+#summary(lfTime2)
+#par(mfrow=c(1,2)); plot(lfTime); par(mfrow=c(2,2))
+```
+
+
+
+
+### Emmeans
+* estimated marginal means of factors
+
+```{r, include = FALSE}
+## visualize (linear predictors, logit scale)
+emmip(lf2h, Time ~ Type)
+emmip(deb2lf2, Time ~ Type)
+
+emmip(debTime, ~ Type)
+emmip(headTime, TimeDisease ~ Type)
+emmip(lfTime2, TimeSource ~ Type)
+```
+
+```{r}
+#Anova(lf2h) # only Type main effect signif
+lf2h.emm <- emmeans(lf2h, ~ Type,
+                         df = summary(lf2h)$df.residual) #67 df
+contrast(lf2h.emm, method = "pairwise", adjust = "bonferroni")
+
+#Anova(deb2lf2) # Type:Time interaction signif, Type main effect semi-signif
+deb2lf2.emm <- emmeans(deb2lf2, ~ Time * Type,
+                         df = summary(deb2lf2)$df.residual) #72 df
+contrast(deb2lf2.emm, method = "pairwise", adjust = "bonferroni")
+
+#Anova(debTime) # only Type tested, and it is signif
+debTime.emm <- emmeans(debTime, ~ Type,
+                         df = summary(debTime)$df.residual) #45 df
+contrast(debTime.emm, method = "pairwise", adjust = "bonferroni")
+
+#Anova(headTime) # Type:TimeDisease interaction signif, Type main effect signif
+headTime.emm <- emmeans(headTime, ~ TimeDisease * Type,
+                         df = summary(headTime)$df.residual) #137 df
+contrast(headTime.emm, method = "pairwise", adjust = "bonferroni")
+
+#Anova(lfTime2) # only Type main effect signif
+lfTime2.emm <- emmeans(lfTime2, ~ Type ,
+                         df = summary(lfTime2)$df.residual) #88 df
+contrast(lfTime2.emm, method = "pairwise", adjust = "bonferroni")
+
+```
+
+
+
+```{r}
+sessionInfo()
+```
+
+
+
+###### end
