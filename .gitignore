@@ -24,4 +24,4 @@ data/VarSamp_curatedSeqs_RDPWarcup.csv
 # knitted html files
 *.html
 
-*.xlsx
+#*.xlsx
