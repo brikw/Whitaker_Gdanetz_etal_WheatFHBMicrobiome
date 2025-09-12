@@ -1,0 +1,235 @@
+---
+title: "Differential Abundance"
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+author: "Briana K. Whitaker"
+date: "`r Sys.Date()`"
+---
+\fontsize{9}{10}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning =FALSE, message=FALSE)
+```
+---
+
+
+
+* Run using `r version[['version.string']] `.
+
+
+## Objective
+This document reports on the differential abundance (DeSEQ2) analysis for the Variety Sampling mycobiome data from samples collected in 2020 and 2021 in Ewing and Urbana Illinois.
+
+
+```{r PRELOAD, echo=FALSE, results='hide', include=FALSE} 
+x<-c("ggplot2", "phyloseq", "DESeq2",  "tidyr", "dplyr")
+lapply(x, require, character.only = TRUE)
+
+#Load functions
+source("./code/multiplot.function.R")
+#add 'not in' function
+`%nin%` = Negate(`%in%`)
+# geometric mean
+gm_mean_protected <- function(x) {
+  if (all(x == 0)) {
+    return (0)
+  }
+  exp(mean(log(x[x != 0])))
+}
+
+#set seed
+set.seed(555)
+
+# set ggplot2 theme
+theme_set(theme_bw(base_size=11)) 
+theme_update(panel.grid.major=element_line(0), panel.grid.minor=element_line(0))
+
+# color palettes
+type_color <- c("#A65628", "#984EA3", "#4DAF4A")
+site_color <- c("#8DD3C7", "#FB8072")
+time_color <- c("#bbdb15", "#ABDDA4", "#66C2A5", "#3288BD", "#5E4FA2")
+dis_color <- c("#D95F02", "#1B9E77")
+```
+
+# Load Phyloseq
+```{r}
+load("./data/VarSamp_ps_assn.RData")
+ps_assn
+```
+
+```{r}
+ps_dis <- subset_samples(ps_assn, DiseaseStatus == 'Lo' | DiseaseStatus == 'Hi' )
+ps_dis <- prune_taxa(taxa_sums(ps_dis)>0, ps_dis)
+ps_dis
+
+SbyE <- data.frame(sample_data(ps_dis))
+table(SbyE$site, SbyE$DiseaseStatus, SbyE$variety.x)
+#table(SbyE$variety.x, SbyE$block)
+```
+
+* 820 taxa in the T5 heads
+
+# DESeq base model
+* note - that the design matrix is only used in estimating dispersion & log2fold changes, but not sizeFactors
+* Create DESeq2 datasets for MAIN EFFECTS (no interaction terms)
+* See DESeq2 vignette for explanation of why including interaction terms alters interpretation of main effects (justification for doing 2 separate models: main effects only and interactions only)
+
+```{r, results = 'hide', fig.width =4, fig.height = 4}
+dds_dis <- phyloseq_to_deseq2(ps_dis, ~ 1)   #no model for now
+dds_dis_main <- DESeqDataSet(dds_dis, ~ site + variety.x + DiseaseStatus)
+dds_dis_main <- estimateSizeFactors(dds_dis_main,
+              geoMeans = apply(counts(dds_dis_main), 1, gm_mean_protected))
+nc <- counts(dds_dis_main, normalized = FALSE)
+filter <- rowSums(nc >= 5) >= 10  
+table(filter)
+dds_dis_main <- dds_dis_main[filter,]
+dds_dis_main <- DESeq(dds_dis_main, test="Wald", fitType="local") #embedded dispersion estimates
+plotDispEsts(dds_dis_main)
+```
+* filter out taxa that do not have at least 5 reads across each of 10 samples
+* this filter method leaves 119 taxa
+
+### Design Matrix
+```{r}
+head(model.matrix(design(dds_dis_main), data = SbyE))
+```
+
+### Wald Tests - log2 fold changes due to main effects
+* BH correction for FDR already used as default in wald tests
+```{r, echo = FALSE, results = 'hide'}
+# # for loops for MAIN EFFECT pairwise contrasts
+# l2fc <- data.frame("baseMean" = numeric(), "log2FoldChange" = numeric(),
+#                    "lfcSE" = numeric(), "stat" = numeric(), "pvalue"=numeric(),
+#                    "padj" = numeric(), "Taxon" = factor(), "Term" = factor(),
+#                    "Contrast" = factor(), "DiseaseStatus" = factor())
+```
+
+* Here is an example for the DiseaseStatus main effect
+```{r, results = 'hide'}
+# ## Get all pairwise 'DiseaseStatus' contrasts
+# DisList <- c('Lo','Hi')
+# for (j in 1:(length(DisList)-1)) { # j = index of 1st genotype
+#   mydds <- get(paste0('dds_', "dis", "_main"))  
+#   #j <- 1
+#   dis21 <- DisList[j]
+#     for (k in (j+1):length(DisList)) { # k = index of 2nd genotype
+#       #k <- 2
+#       dis22 <- DisList[k]
+#       print(paste0(dis21,".",dis22)) # debugging line 
+#       # get log2 fold change between this pair of X
+#       results(mydds, contrast = c('DiseaseStatus', dis21, dis22), alpha = 0.05) %>%
+#         as.data.frame %>% mutate(Taxon = row.names(.), Term = 'DiseaseStatus',
+#         Contrast = paste0(dis21, '_', dis22), DiseaseStatus = 'both') %>%
+#         rbind(.,l2fc) -> l2fc
+#     }
+# }
+#   rm(mydds) # clean up
+# rm(dis21, dis22, j, k) # clean up
+```
+
+### Adjust p-values again for multiple comparisons
+* less relevant for disease and site comparisons, where only 1 comparison possible, more relevant for variety and 2-way interactions
+```{r}
+# write.csv(l2fc, "./tables/VarSamp_deseq_mainEffects_contrasts.csv")
+l2fc <- read.csv("./tables/VarSamp_deseq_mainEffects_contrasts.csv", 
+                 row.names = 1, stringsAsFactors = TRUE)
+
+group_by(l2fc, Taxon, Term) %>% mutate(padjadj = p.adjust(padj, method='BH')) %>%
+  ungroup %>% as.data.frame -> l2fc
+
+# table(l2fc$padj <= 0.05)  #14
+# table(l2fc$padjadj <= 0.05)  #14 (no change, as expected for 1 comparison only)
+# 
+# table(l2fc$padjadj < 0.05 & l2fc$log2FoldChange >= 2)  # 7 taxa
+
+```
+
+
+### Organize
+```{r}
+l2fc %>% filter(padjadj <= 0.05) -> l2fc_signif
+# Set a boolean column for significance
+l2fc$significant <- as.factor(ifelse(l2fc$padjadj <= .05, "Significant", NA))
+l2fc$ASV <- l2fc$Taxon
+
+## set a column for phylum or class, to color results by
+# first make taxa tables dataframes, and add unique ASV column
+tax_dis <- data.frame(ps_dis@tax_table)
+tax_dis$ASV <- rownames(tax_dis)
+# merge with l2fc results
+l2fc <- left_join(l2fc, tax_dis, by = "ASV")
+
+```
+
+
+### Notes for MS
+```{r}
+# median fold change, use abs() for magnitude not direction
+# use (2^) to back-transform from log2fold changes to just fold change
+# only look at significant enrichments/depletions
+l2fc %>%
+  filter(significant == "Significant") %>%
+  group_by(Term) %>% 
+  summarize(medianFC = 2^median(abs(log2FoldChange), na.rm = TRUE)) %>% 
+  ungroup %>% as.data.frame -> medianFCs
+medianFCs  # this is just the fold change
+
+# median log2 fold change (no back transform)
+l2fc %>% 
+  filter(significant == "Significant") %>%
+  group_by(Term) %>% 
+  summarize(medianFC = median(abs(log2FoldChange), na.rm = TRUE)) %>% 
+  ungroup %>% as.data.frame -> medianlogFCs
+medianlogFCs # this is the log2 fold change
+
+l2fc %>% filter(significant == "Significant") -> l2fc_signif
+#table(l2fc_signif$genus, l2fc_signif$Term)
+table(l2fc_signif$genus, l2fc_signif$log2FoldChange>0) 
+```
+* log2 fold-change: positive values indicate enrichment in low disease status, whereas negative values indicate enrichment in high disease.
+
+
+# Figures
+```{r, include = FALSE}
+# MeanAbundance plot
+ma_plot <- ggplot(l2fc, 
+       aes(x = baseMean, y = log2FoldChange, colour = significant, alpha = significant)) + 
+    geom_hline(yintercept = 0, colour="black", linewidth=1, linetype = 1) + 
+    geom_hline(yintercept = 2, colour="coral3", linewidth=1, linetype = 3) + 
+    geom_hline(yintercept = -2, colour="coral3", linewidth=1, linetype = 3) + 
+    geom_point(size=1.4) + 
+    scale_y_continuous("Log2 Fold Change") +   #limits=c(-3, 3) #, oob=squish
+    scale_x_continuous("Mean of Normalized Counts", trans = "log10") + 
+    scale_colour_manual("", values=c("Significant" = "#D95F02"), na.value= "#666666") + 
+    scale_alpha_manual("", values=c("Significant"=1), na.value= 0.4) +
+    geom_text(data = l2fc %>% filter(significant == "Significant"),
+      aes(label = genus), size = 2.2,
+            nudge_x = -0.1, nudge_y = .3) +
+    theme(legend.position = "inside", legend.position.inside = c(.8,.87),
+          legend.title = element_blank())
+#tiff("./figures/DA_meanAbundancePlot.tiff", width=110, height=80, units="mm", res=300)
+ma_plot
+#dev.off()
+```
+
+```{r, include = FALSE}
+
+#write.csv(l2fc_signif, "./tables/VarSamp_deseq_mainEffects_contrasts_signif.csv")
+
+
+```
+
+
+
+```{r}
+sessionInfo()
+```
+
+
+
+###### end
