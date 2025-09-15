@@ -1,0 +1,721 @@
+---
+title: "Networks - Whitaker et al."
+author: "Kristi Gdanetz"
+date: "2024-11-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "~/Documents/Whitaker_Gdanetz_etal_WheatFHBMicrobiome/")
+```
+
+# Load libraries 
+```{r include=FALSE}
+library(tidyverse)
+library(phyloseq)
+library(network)
+library(sna)
+library(igraph)
+library(intergraph)
+library(Matrix)
+library(SpiecEasi)
+library(GGally)
+library(ggnetwork)
+library(cowplot)
+theme_set(theme_cowplot())
+set.seed(117)
+```
+
+# Custom functions
+Filter phyloseq object to remove unclassified ASVs - Warcup formatted data
+```{r}
+## negate = TRUE returns non-matching values 
+removeUnidentified <- function(physq.obj, new.physq.obj) {
+  new.physq.obj = subset_taxa(physq.obj, str_detect(domain, "Unk.", negate = TRUE))
+  new.physq.obj = subset_taxa(physq.obj, str_detect(phylum, "Unk.", negate = TRUE))
+  new.physq.obj = subset_taxa(physq.obj, str_detect(class, "Unk.", negate = TRUE))
+  new.physq.obj = subset_taxa(physq.obj, str_detect(order, "Unk.", negate = TRUE))
+  new.physq.obj = subset_taxa(physq.obj, str_detect(family, "Unk.", negate = TRUE))
+  return(new.physq.obj)
+}
+```
+Filter phyloseq object to remove unclassified ASVs - UNITE formatted data. Need to replace NA species with genus + sp., these are getting unintentionally removed by str_detect(). 
+```{r}
+removeIncertaeSedis <- function(physq.obj, new.physq.obj) {
+ 
+  # list of Fusarium ASVs to update
+  Fus_ASV <- c("ASV39", "ASV83", "ASV1175")
+  # Fusarium lineage: Fungi/Ascomycota/Sordariomycetes/Hypocreales/Nectriaceae/Fusarium/Fusarium_sp	
+  Fus_df <- tibble(OTU_ID = Fus_ASV,
+                   domain = rep("Fungi", length(Fus_ASV)), 
+                   phylum = rep("Ascomycota", length(Fus_ASV)),  
+                   class = rep("Sordariomycetes", length(Fus_ASV)), 
+                   order = rep("Hypocreales", length(Fus_ASV)), 
+                   family = rep("Nectriaceae", length(Fus_ASV)),
+                   genus = rep("Fusarium", length(Fus_ASV)),
+                   species = rep("Fusarium_sp", length(Fus_ASV)) )
+   
+    # extract shared table
+    shared_new <- otu_table(physq.obj)
+    # extract metadata table
+    meta_new <- sample_data(physq.obj)
+    
+    # extract taxonomy table 
+    tax_new <- physq.obj %>% #ps_assn %>% #
+      # replace NAs 
+      tax_table() %>% as.data.frame() %>%
+      mutate(phylum = replace_na(phylum, "Unidentified"),
+             class = replace_na(class, "Unidentified"),
+             order = replace_na(order, "Unidentified"),
+             family = replace_na(family, "Unidentified"),
+             genus = replace_na(genus, "Unidentified"),
+             # add placeholder for genus but no sp. IDs 
+             species = coalesce(species, paste(genus, "_sp", sep="")) ) %>%
+      # recode manual/BLASTed Fusarium spp. annotations: ASV39, ASV83, ASV1175 
+      rownames_to_column(var = "OTU_ID") %>%
+      filter(!OTU_ID %in% Fus_df$OTU_ID) %>% #remove rows to update
+      rbind(Fus_df) %>% # add replacement values
+      column_to_rownames(var = "OTU_ID") %>% 
+      as.matrix() %>% tax_table() # convert back to phyloseq format 
+      
+    # combine into new object 
+    new.physq.obj <- phyloseq(shared_new, meta_new, tax_new) %>%
+      # remove protists
+      subset_taxa(., str_detect(domain, "Fungi")) %>%
+      # unclassified kingdom and below
+      subset_taxa(., str_detect(species, "Fungi_sp", negate = TRUE)) %>%
+      subset_taxa(., str_detect(species, "Fungi_sp ", negate = TRUE)) %>%
+      subset_taxa(., str_detect(species, " Fungi_sp", negate = TRUE)) %>%
+      # unclassified phylum and below
+      subset_taxa(., str_detect(phylum, "Unidentified", negate = TRUE)) %>%
+      subset_taxa(.,str_ends(genus,"mycota_gen_Incertae_sedis",negate=TRUE))%>%
+      # unclassified at class level and below
+      subset_taxa(., str_detect(class, "Unidentified", negate = TRUE)) %>%
+      subset_taxa(., str_detect(order, "Unidentified", negate = TRUE)) %>%
+      subset_taxa(.,str_ends(genus,"mycetes_gen_Incertae_sedis",negate=TRUE))%>%
+      # unclassified at family level and below
+      subset_taxa(., str_detect(family, "Unidentified", negate = TRUE)) %>%
+      subset_taxa(., str_ends(genus, "ales_gen_Incertae_sedis", negate = TRUE))
+  return(new.physq.obj)
+}
+```
+
+# Color palettes
+ps_hi and ps_lo have 11 classes. ps_D has 33 classes
+```{r}
+cols <- c("Agaricomycetes"="#99540F", "Agaricostilbomycetes"="#FFAD66",
+          "Cystobasidiomycetes"="#FFFF99",
+          "Dothideomycetes"="#6B990F","Eurotiomycetes"="#A3CC51", 
+          "Exobasidomycetes"= "#E5FFB2", 
+          "Leotiomycetes"="#260F99","Microbotryomycetes"="#6551CC",
+          "Orbiliomycetes"="#BFB2FF",
+          "Pezizomycotina_cls_Incertae_sedis"= "#FFB2B2", 
+          "Pucciniomycetes"="#CC5151", "Saccharomycetes"="#990F0F",
+          "Sordariomycetes"="#FF6E00", "Spiculogloeomycetes"="#FFD8B2",
+          "Taphrinomycetes"="#0F6B99", "Tremellomycetes"="#51A3CC", 
+          "Ustilaginomycetes"="#B2E5FF")
+```
+
+# Import Phyloseq
+Original analysis was with RDP and Warcup. However Warcup isn't getting updated as frequently as UNITE. 
+```{r eval=FALSE, include=FALSE}
+# # Warcup classification
+# load("data/VarSamp_ps_assn.RData")
+# ps_assn #2580 taxa, 219 samples
+
+warcup <- read_delim(file = "data/VarSamp_curatedSeqs_RDPWarcup_highConf-edit.csv", delim = ",", col_names = TRUE)
+
+warcup_Fus <- filter(warcup, genus == "Fusarium" | genus == "Gibberella") %>%
+  rename("ASV" = "...1")
+
+ASV_Fus <- as.data.frame(tax_new) %>%
+  rownames_to_column(var = "ASV") %>%
+  filter(ASV %in% warcup_Fus$ASV) %>%
+  full_join(warcup_Fus, by = "ASV",
+            suffix = c(".UN", ".WC")) %>%
+  select("ASV",
+         #"domain.UN", "domain.WC", "phylum.UN", "phylum.WC",
+         #"class.UN", "class.WC", "order.UN", "order.WC",  
+         "family.UN","family.WC","genus.UN","genus.WC","species.UN","species.WC")
+
+#write_delim(ASV_Fus, file = "Fusarium_ASVs.csv", delim = ",")
+```
+
+Repeated taxonomic assignment using UNITE database. However now some Fusarium/Giberella ASVs are below Ascomycota (phylum level). Manual BLAST curation of select unidentified UNITE ASVs, added three Fusaria: ASV39, ASV83, ASV1175
+```{r}
+load("VarSamp_ps_assn.RData")
+ps_assn #2580 taxa and 219 samples
+```
+
+# Format objects for analysis
+Check otu abundance distribution 
+```{r eval=FALSE, include=FALSE}
+sample_sum_df <- data.frame(sum = sample_sums(ps_assn))
+# Histogram of sample read counts
+ggplot(sample_sum_df, aes(x = sum)) + 
+  geom_histogram(color = "black", fill = "indianred", binwidth = 2500) +
+  ggtitle("Distribution of sample sequencing depth") + 
+  xlab("Read counts") +
+  theme(axis.title.y = element_blank())
+# Summary statistics
+smin <- min(sample_sums(ps_assn)) #524
+smean <- mean(sample_sums(ps_assn)) #36,360
+smax <- max(sample_sums(ps_assn)) #421,332
+```
+
+### Subset phyloseq
+Subset by plant tissue
+```{r}
+# subset objects by plant tissue
+ps_D <- subset_samples(ps_assn, typeSample == "debris") %>% #48 samples
+  removeIncertaeSedis() %>% #2055 taxa
+  prune_taxa(taxa_sums(.)>=50, .) #357 taxa
+
+# ps_L <- subset_samples(ps_assn, typeSample == "leaf") %>% #75 samples
+#   prune_taxa(taxa_sums(.)>=50, .) #190 taxa
+# 
+# ps_H <- subset_samples(ps_assn, typeSample == "head") %>% #96 samples 
+#   prune_taxa(taxa_sums(.)>=50, .) #870 taxa
+```
+Subset by disease state
+```{r}
+# subset objects by disease state
+ps_hi <- subset_samples(ps_assn, DiseaseStatus == "Hi") %>% #24 samples
+  removeIncertaeSedis() %>% #2055 taxa
+  prune_taxa(taxa_sums(.)>=50, .) #199 taxa
+
+ps_lo <- subset_samples(ps_assn, DiseaseStatus == "Lo") %>% #24 samples 
+  removeIncertaeSedis() %>% #2055 taxa
+  prune_taxa(taxa_sums(.)>=50, .) #255 taxa
+```
+
+### Node size calculations 
+Calculate vertex size data, based on abundance 
+```{r}
+# sum counts for each ASV across all samples in phyloseq objects 
+sum_list_ps_hi <- sort(taxa_sums(ps_hi)) #320,139; 199
+sum_list_ps_lo <- sort(taxa_sums(ps_lo)) #243,031; 255
+sum_list_ps_D <- sort(taxa_sums(ps_D)) #368,991; 357
+# sum_list_ps_L <- sort(taxa_sums(ps_L)) #52,087; 190
+# sum_list_ps_Η <- sort(taxa_sums(ps_H)) #587,086; 870
+
+# # combine all summed vectors 
+sum_test <- sort(c(sum_list_ps_hi, sum_list_ps_lo, sum_list_ps_D, 
+                   sum_list_ps_L, sum_list_ps_Η))
+sum_list <- sort(taxa_sums(ps_assn)) #815,945; 2580 
+
+# identify potential breaks in list of ASV sums
+quantile(sum_list) #50 / 96 / 237 / 1,027 / 587,086 
+# normalize ASV sum values to integers for plot node sizes 
+vsize <- round(clr(sum_list)+10, digits = 0) #6-19
+
+# set breaks for node size, use full ASV list:
+# <=300 / 301-999 / 1,000-5,000 / 5,001-10,000 / >=10,001
+vsize <- taxa_sums(ps_assn) %>% #sum ASV counts
+  # format object to recode counts
+  as.data.frame() %>% 
+  dplyr::rename(Sizes = ".") %>%
+  rownames_to_column(var = "OTU_ID") %>%
+  # bin and recode ASV count values 
+  mutate(Sizes = case_match(Sizes, c(0:1000) ~ 3 , #c(301:999) ~ 7,
+                            c(1001:5000) ~ 9, c(5001:10000) ~ 15,
+                            c(10001:815945) ~ 21 )) 
+```
+
+# Spiec Easi
+Set phyloseq object for input, get sample type variable name 
+```{r}
+#ps_in <- ps_hi #199 taxa and 24 samples
+ps_in <- ps_lo #255 taxa and 24 samples
+Filter_Var <- levels(as.data.frame(sample_data(ps_in))$DiseaseStatus) #ps_hi, ps_lo 
+
+# ps_in <- ps_D #357 taxa and 48 samples
+# Filter_Var <- levels(as.data.frame(sample_data(ps_D))$typeSample) #ps_D, ps_pL, ps_H
+```
+
+### Network calculations
+Conduct the network calculations 
+```{r}
+# filter full vertex list for ASVs in working phyloseq object 
+vsize_in <- vsize %>% 
+  dplyr::filter(OTU_ID %in% rownames(as.data.frame(tax_table(ps_in))) ) %>%
+  deframe()
+# network calculation
+spiec_out <- spiec.easi(ps_in, method='mb', 
+                       lambda.min.ratio=1e-2, nlambda=20, 
+                       pulsar.params = list(rep.num=40, ncores=16)) 
+# covert to igraph object
+ig.spiec_out <- adj2igraph(getRefit(spiec_out), #rmEmptyNodes = T,
+                           vertex.attr = list(name = taxa_names(ps_in)) )
+# quick check with phyloseq function
+plot_network(ig.spiec_out, ps_in, #network and phyloseq object 
+             type = "taxa", color = "class", label = "species",
+             point_size = vsize_in,
+             hjust = 1.0) 
+```
+
+### Edge appearance
+Add edge colors based on nodes connected
+```{r}
+# The inverse covariance matrix is obtained via a form of regression
+betaMat <- as.matrix(symBeta(getOptBeta(spiec_out)))
+# get ASV id list
+otu.ids <- colnames(spiec_out[[1]]$data)
+# get edges from igraph - ASV to ASV connections
+edges <- E(ig.spiec_out)
+
+# create empty vectors for loop 
+edge.colors = c()
+edge.weight = c()
+edge.line = c()
+# Loop over edge list, calculate directionality and edge weights 
+for(e.index in 1:length(edges)){
+  adj.nodes = ends(ig.spiec_out, edges[e.index])
+  xindex = which(otu.ids == adj.nodes[1])
+  yindex = which(otu.ids == adj.nodes[2])
+  beta = betaMat[xindex, yindex]
+  if(beta > 0){
+    edge.colors = append(edge.colors, "black")
+    #edge.weight = format(beta*100,digits=3)
+    edge.line = append(edge.line, "solid")
+    weight = format(beta*100, digits = 3)
+    edge.weight = append(edge.weight, weight)
+    cat("Beta pos:",beta,"\n")
+  }else if(beta <= 0){
+    edge.colors = append(edge.colors, "black")
+    edge.line = append(edge.line, "dashed")
+    weight = format(beta*100, digits = 3)
+    edge.weight = append(edge.weight, weight)
+    cat("Beta neg:", beta, "\n") }
+}
+
+# add value for edges to network object 
+igraph::E(ig.spiec_out)$color <- edge.colors
+# convert weights from character to numeric  
+igraph::E(ig.spiec_out)$weight <- abs(as.numeric(edge.weight) )
+# add value for edge line type to network object
+igraph::E(ig.spiec_out)$line <- edge.line
+```
+
+### Fusarium connections
+Summarize positive and negative connections
+```{r}
+# get updated OTU table for current phyloseq object
+sp_list <- ps_in %>%
+  tax_table() %>% as.data.frame() %>%
+  rownames_to_column(var = "from") %>%
+  select(from, species)
+
+# extract edge list as data frame
+edge_df <- igraph::as_data_frame(ig.spiec_out) %>%
+  # join with ASV taxonomic classifications
+  left_join(sp_list, by = "from") %>%
+  left_join(rename(sp_list, "to" = "from"), 
+            by = "to", suffix = c(".from", ".to")) %>%
+  # clean up columns
+  mutate(Direction = case_match(`line`, "dashed"~"negative", 
+                                "solid"~"positive")) %>%
+  rename(From = from, Species_from = species.from,
+         To = to, Species_to = species.to, 
+         Weight = weight) %>% 
+  select(From, Species_from, To, Species_to, Weight, Direction) %>%
+  # add network sources #ps_hi, ps_lo
+  add_column(Sample = Filter_Var) 
+```
+
+Extract all Fusarium connected nodes, and list their first and second degree connections. 
+```{r}
+# Fusarium connections - 1st degree 
+Fus_edge_df <- edge_df %>%
+  # filter for Fusarium sp. and Gibberella sp. 
+  filter(str_starts(Species_from, "Fusarium|Gibberella") |
+         str_starts(Species_to, "Fusarium|Gibberella") )
+
+# Extract node names from Fusarium nodes
+Fus_nodes <- Fus_edge_df %>%
+  # make into a single list 
+  select(From, To) %>%
+  pivot_longer(cols = c("From", "To"), 
+               names_to = "temp", values_to = "Node") %>%
+  # remove duplicates from nodes with multiple edges
+  select(-temp) %>% unique() %>%
+  # add species assignments
+  left_join(rename(sp_list, "Node" = "from") ) %>%
+  # filter for Fusarium sp. and Gibberella sp. 
+  filter(str_starts(species, "Fusarium|Gibberella") )
+
+# Extract node names of 1st degree connections
+deg_1 <- Fus_edge_df %>%
+  # get ASV list for From & To nodes
+  select(From, To) %>%
+  # make into a single list 
+  pivot_longer(cols = c("From", "To"), 
+               names_to = "temp", values_to = "Node") %>%
+  # remove duplicates from nodes with multiple edges
+  select(-temp) %>% unique() %>%
+  # add species assignments
+  left_join(rename(sp_list, "Node" = "from") ) %>%
+  # filter for non-Fusaria 
+  filter(str_starts(species, "Fusarium|Gibberella", negate = TRUE) )
+
+# Extract node names of 2nd degree connections 
+deg_2 <- edge_df %>%
+  # Use 1st degree connections as start point
+  filter(From %in% deg_1$Node | 
+           To %in% deg_1$Node) %>%
+  # make into a single list
+  select(From, To) %>%
+  pivot_longer(cols = c("From", "To"), 
+               names_to = "temp", values_to = "Node") %>%
+  # remove duplicates from nodes with multiple edges
+  select(-temp) %>% unique() %>%
+  # remove 1st degree nodes
+  filter(!Node %in% deg_1$Node) %>% 
+  # add species assignments
+  left_join(rename(sp_list, "Node" = "from") ) %>%
+  # filter for non-Fusaria 
+  filter(str_starts(species, "Fusarium|Gibberella", negate = TRUE) )
+
+# Combine lists of node names
+keep_nodes <- rbind(add_column(Fus_nodes, Group = "Fusaria"), 
+                    add_column(deg_1, Group = "1st"), 
+                    add_column(deg_2, Group = "2nd")) %>% unique()
+
+# Extract edges for 1st and 2nd degree nodes
+keep_edges <- rbind(
+  select(Fus_edge_df, From, To), # for first degree
+  # for second degree
+  select(filter(edge_df, From %in% deg_1$Node | 
+                  To %in% deg_1$Node), From, To) ) %>%
+  # remove duplicates 
+  unique() %>%
+  # make new variable to simplify filtering
+  mutate(new_var = paste(From, To, sep = "--") ) %>%
+  select(new_var) %>% as.list()
+```
+
+### Transparency 
+Set alpha (transparency) values for nodes outside of 1st and 2nd degree Fusarium connections
+```{r}
+# loop over each node/vertex name, set alpha value based on Keep Node list
+nodes.alphas = c() #create empty vector for loop
+for(v.index in vertex_attr(ig.spiec_out, "name")){
+  if(v.index %in% keep_nodes$Node){ 
+    nodes.alphas = append(nodes.alphas, 0.9) 
+    cat("Keep node", v.index, "\n") }
+  else{
+    nodes.alphas = append(nodes.alphas, 0.25) 
+    cat("Hide node", v.index, "\n") }
+}
+# add alpha value as node attribute to network object 
+igraph::V(ig.spiec_out)$NodeAlphas <- nodes.alphas
+```
+
+Set alpha (transparency) values for edges
+```{r}
+# create empty vector to use in loop
+edges.alphas = c() 
+# extract edges, format for loop 
+full_edge_list <- ends(ig.spiec_out, E(ig.spiec_out)) %>%
+  as.data.frame() %>% 
+  rename(From = V1, To = V2) %>% 
+  # make new variable to simplify filtering
+  mutate(new_var = paste(From, To, sep = "--") ) %>%
+  select(new_var) %>% as.list()
+
+# loop over each edge, set alpha value based on Keep Edge list 
+for(e.index in full_edge_list$new_var) {
+  if(e.index %in% keep_edges$new_var){
+    edges.alphas = append(edges.alphas, 0.9)
+    cat("Keep edge:", e.index, "\n") }
+  else{
+    edges.alphas = append(edges.alphas, 0.25)
+    cat("Hide edge:", e.index, "\n") }   #)
+}
+# add alpha value for edges to network object
+igraph::E(ig.spiec_out)$EdgeAlphas <- edges.alphas
+```
+
+### Node information
+Extract values for node shapes
+```{r}
+# loop over each node/vertex name, set shape value based Fusarium list
+nodes.shapes = c() #create empty vector for loop
+for(v.index in vertex_attr(ig.spiec_out, "name")){
+  if(v.index %in% Fus_nodes$Node){ 
+    nodes.shapes = append(nodes.shapes, 17) #triangle 
+    cat("Circle", v.index, "\n") }
+  else{
+    nodes.shapes = append(nodes.shapes, 19) #circle
+    cat("Square", v.index, "\n") }
+}
+# add shape value as node attribute to network object 
+igraph::V(ig.spiec_out)$NodeShapes <- nodes.shapes
+```
+
+Extract values for node colors and labels 
+```{r}
+# set plot rank levels for each data set 
+ClassColor <- "class" 
+
+# get node/vertex names (ASV names)
+otu_ids <- igraph::V(ig.spiec_out)$name 
+
+# subset taxonomy table based on vertex name list 
+idx <- which(row.names(tax_table(ps_in)) %in% otu_ids)
+# get strings of rank names for vertex/node id list 
+taxa2 <- as.character(tax_table(ps_in)[,ClassColor])[idx]
+
+# Get color palette based on rank level set above
+# number of nodes in whole network
+nb_nodes <- vcount(ig.spiec_out) 
+# use color vector to assign hex code to node at set rank level, set as factor
+names(Colors) <- levels(as.factor(taxa2))
+
+# assign taxa names from above to vertexes/nodes 
+igraph::V(ig.spiec_out)$ClassColor <- taxa2
+
+# use intergraph function to convert igraph object to network object
+# %v% == vertex extraction/assignment operator
+net <- asNetwork(ig.spiec_out) #intgrph
+net %v% ClassColor <- as.character(taxa2)
+```
+
+# Plots
+### Full network
+set breaks for node size:<=300 / 301-999 / 1,000-5,000 / 5,001-10,000 / >=10,001 (ASV abundance)
+set breaks for node size: <=10 / 11-13 / 14 -16 / >=17 (clr-normalized vertex values)
+```{r}
+p <-  GGally::ggnet2(net,
+                     mode = "fruchtermanreingold",
+                     node.alpha = nodes.alphas,
+                     node.size = vsize_in, 
+                     node.color = ClassColor,
+                     node.shape = nodes.shapes, #default = 19 -> solid circle
+                     palette = Colors, 
+                     edge.size = 0.5,
+                     edge.color = edge.colors, 
+                     edge.lty = edge.line, #edge.label = edge.weight,
+                     edge.alpha = edges.alphas, #edge.alpha = 0.7,
+                     label = TRUE, 
+                     label.size = 2.5) +
+  # update labels for node sizes 
+  scale_size_discrete(name = "Abundance",
+                      labels = c("<=1000", "1001-5000",
+                                 "5001-10000", ">=10001")) +
+  guides(color = guide_legend(title = "Class", 
+                              override.aes = list(size = 3))) +
+  scale_color_manual("class", 
+                     breaks = c("Agaricomycetes", "Agaricostilbomycetes", "Cystobasidiomycetes",
+                                "Dothideomycetes", "Eurotiomycetes", "Exobasidomycetes", 
+                                "Leotiomycetes", "Microbotryomycetes", "Orbiliomycetes",
+                                "Pezizomycotina_cls_Incertae_sedis", "Pucciniomycetes",
+                                "Saccharomycetes", "Sordariomycetes", "Spiculogloeomycetes",
+                                "Taphrinomycetes", "Tremellomycetes", "Ustilaginomycetes" ),
+                     labels = c("Agaricomycetes", "Agaricostilbomycetes", "Cystobasidiomycetes",
+                                "Dothideomycetes", "Eurotiomycetes", "Exobasidomycetes", 
+                                "Leotiomycetes", "Microbotryomycetes", "Orbiliomycetes",
+                                "Pezizomycotina Incertae sedis", "Pucciniomycetes",
+                                "Saccharomycetes", "Sordariomycetes", "Spiculogloeomycetes",
+                                "Taphrinomycetes", "Tremellomycetes", "Ustilaginomycetes" ),
+                     values = cols)
+p
+```
+
+
+# Network statistics
+Summary statistics of networks
+```{r}
+#saveRDS(ig.spiec_out, file = "ig_D.spiec_out.RDS")
+#saveRDS(ig.spiec_out, file = "ig_hi.spiec_out.RDS")
+#saveRDS(ig.spiec_out, file = "ig_lo.spiec_out.RDS")
+
+is_igraph(ig.spiec_out) #should be TRUE
+summary(ig.spiec_out) #UNW = undirected, named, weighted; 216 nodes, 343 edges
+```
+
+### Degree
+```{r}
+# calculate degree
+deg_df <- igraph::degree(ig.spiec_out)  %>%
+  # convert result to data frame
+  as.data.frame() %>%
+  rownames_to_column(var = "Node") %>%
+  rename("Degree" = ".")
+
+# mean degree for network
+avg_deg_df <- deg_df %>%
+  summarise(Avg = mean(Degree),
+            Med = median(Degree),
+            Min = min(Degree),
+            Max = max(Degree))
+```
+
+### Betweenness
+Betweenness centrality - weights need to be positive integers
+```{r}
+btwn_df <- igraph::betweenness(ig.spiec_out) %>%
+  # convert result to data frame
+  as.data.frame() %>%
+  rownames_to_column(var = "Node") %>%
+  rename("Betweenness" = ".")
+```
+
+### Closeness 
+Closeness centrality 
+```{r}
+cc_df <- igraph::closeness(ig.spiec_out) %>%
+  # convert result to data frame
+  as.data.frame() %>%
+  rownames_to_column(var = "Node") %>%
+  rename("Closeness" = ".")
+```
+
+### Percentile 
+Fit statistics to normal distribution. Identify 95th and 75th percentiles. 
+```{r}
+stat_df <- left_join(deg_df, btwn_df, by = "Node") %>%
+  left_join(cc_df, by = "Node") 
+
+hist(stat_df$Degree, col = "red") 
+quantile(stat_df$Degree, probs = c(0.75, 0.95), na.rm = TRUE) #4, 6
+
+hist(stat_df$Betweenness, col = "green") 
+quantile(stat_df$Betweenness, probs = c(0.75, 0.95), na.rm = TRUE) #1039.0 2540.5
+
+hist(stat_df$Closeness, col = "blue")
+quantile(stat_df$Closeness, probs = c(0.75, 0.95), na.rm = TRUE) #0.0002244745 0.0002547126
+
+hubs75 <- stat_df %>%
+  # get nodes that are in 75th percentiles
+  filter(Degree >= quantile(stat_df$Degree, 
+                            probs = 0.75, na.rm = TRUE),
+         Betweenness >= quantile(stat_df$Betweenness, 
+                                 probs = 0.75, na.rm = TRUE),
+         Closeness >= quantile(stat_df$Closeness, 
+                               probs = 0.75, na.rm = TRUE) ) %>%
+  add_column(Percentile = "75th")
+
+hubs95 <- stat_df %>%
+  # get nodes that are in 95th percentiles
+  filter(Degree >= quantile(stat_df$Degree, 
+                            probs = 0.95, na.rm = TRUE),
+         Betweenness >= quantile(stat_df$Betweenness, 
+                                 probs = 0.95, na.rm = TRUE),
+         Closeness >= quantile(stat_df$Closeness, 
+                               probs = 0.95, na.rm = TRUE) ) %>%
+  add_column(Percentile = "95th")
+```
+Combine hub data frames into single table to save to local computer 
+```{r}
+# add variable to data frame 
+hubs_df <- rbind(hubs75, hubs95) %>%
+  add_column(Sample = Filter_Var) 
+```
+
+### Other stats
+Get list of connections to ASVs identified as significant in DeSeq analysis: 
+```{r}
+# make list 
+# remove fusaria from this list: filter("ASV2", "ASV278") 
+asv_desq <- c("ASV1", "ASV11", "ASV27", "ASV29", "ASV31", "ASV96", "ASV99", 
+              "ASV122", "ASV151", "ASV155", "ASV201", "ASV331") %>%
+```
+
+Connections to ASV331
+```{r}
+# is it present in each network
+asv331_df <- edge_df %>%
+  # extract connections and edge weights
+  filter(From == "ASV331" | To == "ASV331")
+# save to table 
+FileName <- paste("Network Analysis/ASV331", Filter_Var, Sys.Date(), ".csv", sep = "_")
+write_delim(asv331_df, file = FileName, delim = ",", col_names = TRUE)
+```
+
+Summarize nodes connected to Fusaria for supplemental table 
+```{r}
+# Custom function to write data frames containing lists to file 
+tibble_with_lists_to_csv <- function(tibble_object, file_path_name) {
+  set_lists_to_chars <- function(x) { 
+    if(class(x) == 'list') { 
+      y <- sapply(seq(x), function(y) 
+        paste(unlist(x[y]), sep="", collapse=", ")) } 
+    else { y <- x  } 
+    return(y) }
+  new_frame <- data.frame(lapply(tibble_object, set_lists_to_chars), 
+                          stringsAsFactors = FALSE)
+  write_delim(new_frame, file = file_path_name, delim = "\t", col_names = TRUE)
+}
+```
+
+```{r}
+# get file name for saving tibble
+FileName <- paste("Network Analysis/Supp_tab", Filter_Var, Sys.Date(), ".tsv", sep = "_")
+
+# Summarize nodes connected to Fusaria for supplemental table
+sum_stats_from <- edge_df %>%
+  # drop species from latin binomial
+  separate_wider_delim(cols = Species_to, delim = "_", 
+                                    names = c("Genus", "Species") ) %>% 
+  # make new variable with genus & ASV
+  mutate(Target = paste(Genus, "(", To, "),", sep = " ") ) %>%
+  # only nodes connected to Fusarium
+  filter(str_starts(Species_from, "Fusarium|Gibberella") ) %>%
+  # count connections
+  group_by(From, Species_from, Direction) %>%
+  summarise(N = n(),
+            Taxa = list(Target)) %>% ungroup() %>%
+  dplyr::rename(Node = From, Species = Species_from)
+
+# Repeat for other node direction 
+sum_stats_to <- edge_df %>%
+  separate_wider_delim(cols = Species_from, delim = "_", 
+                                    names = c("Genus", "Species") ) %>% 
+  mutate(Target = paste(Genus, "(", From, "),", sep = " ")) %>%
+  filter(str_starts(Species_to, "Fusarium|Gibberella") ) %>%
+  group_by(To, Species_to, Direction) %>%
+  summarise(N = n(),
+            Taxa = list(Target)) %>% ungroup() %>% 
+  dplyr::rename(Node = To, Species = Species_to)
+
+# combine two tibbles 
+Supp_tab_taxa <- rbind(sum_stats_from, sum_stats_to) %>%
+  add_column(Network = Filter_Var)
+# save to local computer 
+tibble_with_lists_to_csv(Supp_tab_taxa, FileName)
+```
+
+
+# Export files
+```{r}
+# hub table
+FileName <- paste("Network Analysis/HubTaxa", Filter_Var, Sys.Date(), ".csv", sep = "_")
+write_delim(hubs_df, file = FileName, delim = ",", col_names = TRUE)
+
+# full edge table
+FileName <- paste("Network Analysis/EdgeTable", Filter_Var, Sys.Date(), ".csv", sep = "_")
+write_delim(edge_df, file = FileName, delim = ",", col_names = TRUE)
+
+# Fusarium node list
+FileName <- paste("Network Analysis/Fusarium_nodes", Filter_Var, Sys.Date(), ".csv", sep = "_")
+write_delim(Fus_nodes, file = FileName, delim = ",", col_names = TRUE)
+
+# Fusarium edge table
+FileName <- paste("Network Analysis/Fusarium_Edges", Filter_Var, Sys.Date(), ".csv", sep = "_")
+write_delim(Fus_edge_df, file = FileName, delim = ",", col_names = TRUE)
+
+# 1st and 2nd degree
+FileName <- paste("Network Analysis/Fusarium_Degrees", Filter_Var, Sys.Date(), ".csv", sep = "_")
+write_delim(keep_nodes, file = FileName, delim = ",", col_names = TRUE)
+
+# network ggplot object
+PlotName <- paste("Network Analysis/Network", Filter_Var, Sys.Date(), ".pdf", sep = "_")
+ggsave(filename = PlotName, plot = p, 
+       units = "in", width = 10, height = 8, dpi = 600)
+```
+
+
+-----
+end
