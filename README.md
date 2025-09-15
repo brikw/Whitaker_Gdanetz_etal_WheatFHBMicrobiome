@@ -1,7 +1,7 @@
 # "Wheat mycobiome dynamics driven by interseasonal crop-crop transfer and Fusarium head blight"
 ### Whitaker B.K., Gdanetz, K., Vaughan M.M., McCormick S.P., Becker, T.
 
-**DOI HERE**
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.17122469.svg)](https://doi.org/10.5281/zenodo.17122469)
 
 This repository includes the R code, data files, small scripts, and a meta data file to supplement the manuscript by Whitaker et al. "Wheat mycobiome dynamics driven by interseasonal crop-crop transfer and Fusarium head blight".
 
